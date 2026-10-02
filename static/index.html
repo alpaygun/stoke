@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stoke status</title>
+<style>
+  body { font: 16px system-ui, sans-serif; max-width: 850px; margin: 2rem auto; padding: 0 1rem; }
+  article { border-top: 1px solid #aaa; padding: 1rem 0; }
+  button, input { margin: .3rem; }
+  #dry-run, .warning, #error { font-weight: bold; }
+  dt { font-weight: bold; margin-top: .5rem; }
+  dd { margin-left: 1rem; }
+</style>
+<h1>Stoke status</h1>
+<p id="dry-run" hidden>DRY RUN</p>
+<p id="error" role="alert"></p>
+<main id="tools"></main>
+<script>
+  const tools = document.querySelector('#tools');
+  const error = document.querySelector('#error');
+  const busy = new Set();
+  let clockOffset = 0;
+  const time = value => value == null ? '—' : new Date(value * 1000).toLocaleString();
+  const now = () => Date.now() / 1000 + clockOffset;
+
+  function countdowns() {
+    document.querySelectorAll('[data-reset]').forEach(element => {
+      const seconds = Math.max(0, Math.ceil(Number(element.dataset.reset) - now()));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor(seconds % 3600 / 60);
+      element.textContent = seconds ? `${hours}h ${minutes}m ${seconds % 60}s` : 'closed';
+    });
+  }
+
+  function row(list, label, value) {
+    const title = document.createElement('dt');
+    const detail = document.createElement('dd');
+    title.textContent = label;
+    detail.textContent = value;
+    list.append(title, detail);
+    return detail;
+  }
+
+  async function post(name, action, body) {
+    const response = await fetch(`/api/tools/${encodeURIComponent(name)}/${action}`, {
+      method: 'POST', headers: { 'X-Stoke': '1', 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function act(name, action, body) {
+    busy.add(name);
+    try {
+      error.textContent = '';
+      await post(name, action, body);
+    } catch (failure) {
+      error.textContent = failure.message;
+    } finally {
+      busy.delete(name);
+      await refresh();
+    }
+  }
+
+  function render(state) {
+    document.querySelector('#dry-run').hidden = !state.dry_run;
+    clockOffset = state.server_time - Date.now() / 1000;
+    tools.replaceChildren();
+    Object.values(state.tools).forEach(tool => {
+      const article = document.createElement('article');
+      const heading = document.createElement('h2');
+      heading.textContent = tool.label;
+      const auto = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = tool.auto_stoke;
+      checkbox.disabled = busy.has(tool.name);
+      checkbox.addEventListener('change', () => {
+        checkbox.disabled = true;
+        act(tool.name, 'auto', { enabled: checkbox.checked });
+      });
+      auto.append(checkbox, 'Auto-stoke');
+      const button = document.createElement('button');
+      button.textContent = tool.running ? 'Stoking…' : 'Stoke now';
+      button.disabled = tool.running || busy.has(tool.name);
+      button.addEventListener('click', () => {
+        button.disabled = true;
+        act(tool.name, 'stoke');
+      });
+      article.append(heading, auto, button);
+      const list = document.createElement('dl');
+      row(list, 'Window', tool.window_open ? 'open' : 'closed');
+      const five = row(list, 'Five-hour', tool.five_hour
+        ? `${tool.five_hour.used_percent.toFixed(1)}% · resets ${time(tool.five_hour.resets_at)} · ` : '—');
+      if (tool.five_hour) {
+        const remaining = document.createElement('span');
+        remaining.dataset.reset = tool.five_hour.resets_at;
+        five.append(remaining);
+      }
+      row(list, 'Weekly', tool.weekly
+        ? `${tool.weekly.used_percent.toFixed(1)}% · resets ${time(tool.weekly.resets_at)}` : '—');
+      const last = tool.last_stoke;
+      row(list, 'Last stoke', last
+        ? `${time(last.at)} · ${last.trigger} · ${last.ok ? 'ok' : 'error: ' + last.error} · opened_new_window: ${last.opened_new_window === null ? 'not expected' : last.opened_new_window}` : '—');
+      row(list, 'Next stoke', time(tool.next_stoke_at));
+      row(list, 'Warning', tool.warning || 'none').className = 'warning';
+      article.append(list);
+      tools.append(article);
+    });
+    countdowns();
+  }
+
+  async function refresh() {
+    try {
+      const response = await fetch('/api/state', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      render(await response.json());
+    } catch (failure) {
+      error.textContent = `State unavailable: ${failure.message}`;
+    }
+  }
+  refresh();
+  setInterval(refresh, 5000);
+  setInterval(countdowns, 1000);
+</script>
+</html>

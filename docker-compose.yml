@@ -1,0 +1,16 @@
+services:
+  stoke:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:${STOKE_PUBLISH_PORT:-8787}:8787"
+    volumes:
+      - ./data:/data
+      - codex-home:/home/stoke/.codex
+    mem_limit: 512m
+    restart: unless-stopped
+
+volumes:
+  codex-home:

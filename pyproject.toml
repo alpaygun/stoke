@@ -1,0 +1,10 @@
+[project]
+name = "stoke"
+version = "0.1.0"
+description = "Keep official coding CLI usage windows running"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

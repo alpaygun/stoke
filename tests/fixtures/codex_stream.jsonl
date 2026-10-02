@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a0fb98-c9b4-7fb2-8f00-e3fa3e33e1f5"}
+invalid JSON
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hi"}}
+{"type":"turn.completed","usage":{"input_tokens":15202,"cached_input_tokens":7296,"output_tokens":5}}

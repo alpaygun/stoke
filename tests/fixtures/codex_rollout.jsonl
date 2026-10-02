@@ -1,0 +1,7 @@
+{"timestamp":"2026-10-02T00:00:00Z","type":"session_meta","payload":{"id":"01a0fb98-c9b4-7fb2-8f00-e3fa3e33e1f5"}}
+{"timestamp":"2026-10-02T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":7.0,"window_minutes":300,"resets_at":1790900000},"secondary":{"used_percent":12.0,"window_minutes":10080,"resets_at":1791000000}}}}
+{"type":"event_msg","payload":{"type":"token_count","rate_limits":null}}
+{"type":"event_msg","payload":{"type":"token_count","rate_limits":[]}}
+malformed JSONL
+{"timestamp":"2026-10-02T00:00:03Z","ordinal":12,"type":"another_outer_type","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":0.0,"window_minutes":300,"resets_at":1790945490},"secondary":{"used_percent":38.0,"window_minutes":10080,"resets_at":1791245696},"plan_type":"plus"}}}
+{"type":"event_msg","payload":{"type":"token_count","rate_limits":null}}

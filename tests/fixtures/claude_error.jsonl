@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Authentication failed: sk-ant-fixture-not-a-real-token","duration_ms":10}

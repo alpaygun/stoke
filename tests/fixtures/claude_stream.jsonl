@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"fixture-session"}
+{"type":"system","subtype":"hook_started","hook_id":"fixture-hook"}
+not a JSON object
+[]
+{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.01,"resetsAt":1790900000}}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1790942400,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.17,"resetsAt":1790942400},"seven_day":{"utilization":0.45,"resetsAt":1791180000}}},"uuid":"fixture-uuid","session_id":"fixture-session"}
+{"type":"system","subtype":"hook_response","output":"done"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"hi","duration_ms":1625}
