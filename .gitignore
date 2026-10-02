@@ -1,0 +1,24 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# runtime data (state.json, codex home, workdir)
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# agent files (never in the repo)
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+CONTEXT.md
+CHANGELOG.md
+
+# stray pytest temp dirs from sandboxed runs
+pytest-cache-files-*/
