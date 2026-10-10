@@ -31,6 +31,8 @@ docker compose up --build
 
 All settings and defaults are documented in `.env.example`. Never commit `.env`.
 
+After each stoke, the Codex session is removed with the official `codex delete` command so no session history accumulates.
+
 ## Updating the CLIs
 
 Both CLI versions are pinned in the `Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`); the CLIs never update themselves. To update, change the version there and rebuild with `docker compose up -d --build`. Each rebuild leaves the old image behind; remove it with `docker image prune -f`.

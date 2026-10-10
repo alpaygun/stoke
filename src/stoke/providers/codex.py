@@ -1,17 +1,28 @@
 """Codex stokes using device-auth credentials in the persistent CODEX_HOME."""
 
 import logging
+import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ..config import Settings
 from ..models import StokeResult, Window
 from ..runner import Runner, run_command
-from .base import LimitsUnreadable, ProviderError, json_objects, parse_window
+from .base import LimitsUnreadable, ProviderError, json_objects, parse_window, short_error
 
 ARGV = ("codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "hi")
+DELETE_ARGV_PREFIX = ("codex", "delete", "--force")
 logger = logging.getLogger(__name__)
+
+
+def _extract_thread_id(text: str) -> str | None:
+    """Recover a thread id even when the stream contains failure events."""
+    thread_id: str | None = None
+    for event in json_objects(text):
+        if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
+            thread_id = event["thread_id"]
+    return thread_id
 
 
 def parse_codex_stream(text: str) -> str | None:
@@ -52,6 +63,25 @@ def parse_codex_rollout(text: str) -> tuple[Window, Window | None]:
     return five_hour, None if weekly is None else parse_window(weekly)
 
 
+def remove_empty_session_dirs(codex_home: Path) -> None:
+    """Remove empty session directories bottom-up without following symlinks."""
+    sessions = codex_home / "sessions"
+    try:
+        if sessions.is_symlink() or not sessions.is_dir():
+            return
+    except OSError:
+        return
+    for directory, _, _ in os.walk(sessions, topdown=False, followlinks=False):
+        path = Path(directory)
+        if path == sessions:
+            continue
+        try:
+            if not path.is_symlink():
+                path.rmdir()
+        except OSError:
+            pass
+
+
 class CodexProvider:
     """Run the official Codex CLI and read its session limit data."""
 
@@ -76,25 +106,53 @@ class CodexProvider:
             )
         except OSError:
             raise ProviderError("Codex CLI could not be started") from None
-        if command.timed_out:
-            raise ProviderError("Codex CLI timed out")
-        thread_id = parse_codex_stream(command.stdout)
-        if command.returncode != 0:
-            raise ProviderError(command.stderr or "Codex CLI exited unsuccessfully")
-        if thread_id is None:
-            raise LimitsUnreadable("limits unreadable")
+        cleanup_thread_id = _extract_thread_id(command.stdout)
         try:
-            path = find_rollout(self.settings.codex_home, thread_id)
-            if path is None:
+            if command.timed_out:
+                raise ProviderError("Codex CLI timed out")
+            thread_id = parse_codex_stream(command.stdout)
+            if command.returncode != 0:
+                raise ProviderError(command.stderr or "Codex CLI exited unsuccessfully")
+            if thread_id is None:
                 raise LimitsUnreadable("limits unreadable")
-            text = path.read_text(encoding="utf-8")
             try:
-                five_hour, weekly = parse_codex_rollout(text)
-            finally:
+                path = find_rollout(self.settings.codex_home, thread_id)
+                if path is None:
+                    raise LimitsUnreadable("limits unreadable")
+                text = path.read_text(encoding="utf-8")
                 try:
-                    path.unlink(missing_ok=True)
-                except OSError as error:
-                    logger.warning("rollout delete failed: %s", type(error).__name__)
-        except (OSError, UnicodeError):
-            raise LimitsUnreadable("limits unreadable") from None
-        return StokeResult(five_hour, weekly, command.duration_ms)
+                    five_hour, weekly = parse_codex_rollout(text)
+                finally:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception as error:
+                        logger.warning("rollout delete failed: %s", type(error).__name__)
+            except (OSError, UnicodeError):
+                raise LimitsUnreadable("limits unreadable") from None
+            return StokeResult(five_hour, weekly, command.duration_ms)
+        finally:
+            await self._cleanup(cleanup_thread_id, workdir, env)
+
+    async def _cleanup(self, thread_id: str | None, workdir: Path, env: Mapping[str, str]) -> None:
+        """Delete the official session without changing the stoke outcome."""
+        try:
+            try:
+                if thread_id is None or not re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    thread_id, re.IGNORECASE,
+                ):
+                    logger.warning("codex session delete skipped: missing or invalid thread id")
+                    return
+                command = await self.runner(
+                    (*DELETE_ARGV_PREFIX, thread_id), workdir, self.settings.timeout_seconds, env
+                )
+                if command.timed_out:
+                    logger.warning("codex session delete failed: timed out")
+                elif command.returncode != 0:
+                    logger.warning("codex session delete failed: %s", short_error(
+                        command.stderr or f"exit code {command.returncode}"
+                    ))
+            finally:
+                remove_empty_session_dirs(self.settings.codex_home)
+        except Exception as error:
+            logger.warning("codex session delete failed: %s", type(error).__name__)
