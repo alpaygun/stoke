@@ -5,7 +5,7 @@ services:
       - path: .env
         required: false
     ports:
-      - "127.0.0.1:${STOKE_PUBLISH_PORT:-8787}:8787"
+      - "${STOKE_PUBLISH_HOST:-127.0.0.1}:${STOKE_PUBLISH_PORT:-8787}:8787"
     volumes:
       - ./data:/data
       - codex-home:/home/stoke/.codex

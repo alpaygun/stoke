@@ -37,7 +37,7 @@ Both CLI versions are pinned in the `Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_
 
 ## Security
 
-The panel has no login of its own and its port is published on `127.0.0.1` only. To reach it remotely, put an access layer in front of it (e.g. Cloudflare Tunnel + Cloudflare Access, or a VPN). Every `POST` requires the `X-Stoke: 1` header so other sites cannot trigger stokes through your browser.
+The panel has no login of its own and its port is published on `127.0.0.1` only by default (`STOKE_PUBLISH_HOST`; if a tunnel runs in another container, the Docker bridge gateway such as `172.17.0.1` keeps it off the LAN). To reach it remotely, put an access layer in front of it (e.g. Cloudflare Tunnel + Cloudflare Access, or a VPN). Every `POST` requires the `X-Stoke: 1` header so other sites cannot trigger stokes through your browser.
 
 ## Development
 
