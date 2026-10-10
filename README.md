@@ -31,6 +31,10 @@ docker compose up --build
 
 All settings and defaults are documented in `.env.example`. Never commit `.env`.
 
+## Updating the CLIs
+
+Both CLI versions are pinned in the `Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`); the CLIs never update themselves. To update, change the version there and rebuild with `docker compose up -d --build`. Each rebuild leaves the old image behind; remove it with `docker image prune -f`.
+
 ## Security
 
 The panel has no login of its own and its port is published on `127.0.0.1` only. To reach it remotely, put an access layer in front of it (e.g. Cloudflare Tunnel + Cloudflare Access, or a VPN). Every `POST` requires the `X-Stoke: 1` header so other sites cannot trigger stokes through your browser.

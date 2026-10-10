@@ -1,8 +1,9 @@
 FROM node:22-bookworm-slim AS node
 FROM python:3.12-slim-bookworm
 
-ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+# Pinned on purpose: an unpinned install is cached at whatever version the first build saw.
+ARG CLAUDE_CODE_VERSION=2.1.296
+ARG CODEX_VERSION=0.162.1
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -24,6 +25,7 @@ COPY static ./static
 
 ENV HOME=/home/stoke \
     CODEX_HOME=/home/stoke/.codex \
+    DISABLE_AUTOUPDATER=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src
 USER stoke
