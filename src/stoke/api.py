@@ -1,4 +1,4 @@
-"""FastAPI JSON endpoints and the temporary plain status page."""
+"""FastAPI JSON endpoints and the status page."""
 
 from contextlib import asynccontextmanager
 from pathlib import Path

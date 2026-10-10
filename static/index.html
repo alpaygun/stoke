@@ -1,130 +1,418 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stoke status</title>
-<style>
-  body { font: 16px system-ui, sans-serif; max-width: 850px; margin: 2rem auto; padding: 0 1rem; }
-  article { border-top: 1px solid #aaa; padding: 1rem 0; }
-  button, input { margin: .3rem; }
-  #dry-run, .warning, #error { font-weight: bold; }
-  dt { font-weight: bold; margin-top: .5rem; }
-  dd { margin-left: 1rem; }
-</style>
-<h1>Stoke status</h1>
-<p id="dry-run" hidden>DRY RUN</p>
-<p id="error" role="alert"></p>
-<main id="tools"></main>
-<script>
-  const tools = document.querySelector('#tools');
-  const error = document.querySelector('#error');
-  const busy = new Set();
-  let clockOffset = 0;
-  const time = value => value == null ? '—' : new Date(value * 1000).toLocaleString();
-  const now = () => Date.now() / 1000 + clockOffset;
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stoke</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    button, label { -webkit-tap-highlight-color: transparent; }
+    button { cursor: pointer; }
+    button:disabled, input:disabled { cursor: default; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    h1, h2, p, dl, dd { margin: 0; }
+    [hidden] { display: none !important; }
+    .page { min-height: 100vh; padding: var(--page-padding); }
+    .wrap { max-width: var(--page-width); margin: 0 auto; display: flex; flex-direction: column; gap: var(--page-gap); }
+    .header, .header-tools, .brand, .card-heading, .tool-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+    .header, .card-heading { justify-content: space-between; }
+    .brand { min-width: 0; }
+    .header-tools { justify-content: flex-end; }
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; line-height: 1.5; }
+    .dry-run { font-family: var(--mono); font-size: 12px; font-weight: 600; border-radius: 6px; padding: 4px 8px; }
+    .cards { display: flex; flex-wrap: wrap; gap: 20px; }
+    .card { flex: 1 1 440px; min-width: 0; display: flex; flex-direction: column; }
+    .tool-title { gap: 10px; min-width: 0; }
+    .tool-title h2, .warning, dd, .last-result, #error { overflow-wrap: anywhere; }
+    .chip { flex: none; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
+    .toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+    .toggle input { flex: none; margin: 0; cursor: pointer; }
+    .switch { appearance: none; -webkit-appearance: none; position: relative; transition: background .15s; }
+    .switch::after { content: ""; position: absolute; top: 3px; left: 3px; border-radius: 50%; transition: transform .15s; }
+    .switch:checked::after { transform: translateX(20px); }
+    .toggle input:disabled { cursor: default; }
+    .stoke { min-height: 44px; font-weight: 600; }
+    .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stat { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+    .warning, #error { font-size: 14px; line-height: 1.45; }
+    #error { border: 1px solid var(--error-border); background: var(--error-bg); color: var(--error-fg); padding: 12px 14px; border-radius: 10px; }
+    .track { overflow: hidden; background: var(--track); border-radius: 3px; }
+    .fill { height: 100%; background: var(--accent); }
 
-  function countdowns() {
-    document.querySelectorAll('[data-reset]').forEach(element => {
-      const seconds = Math.max(0, Math.ceil(Number(element.dataset.reset) - now()));
-      const hours = Math.floor(seconds / 3600);
+    /* Dial */
+    :root {
+      --page-padding: 32px 16px 48px; --page-width: 1120px; --page-gap: 24px;
+      --mono: 'IBM Plex Mono', ui-monospace, monospace; --muted: #9AA3AD;
+      --track: #252A30; --accent: #F5A142; --focus: #F5A142;
+      --error-bg: #3A1714; --error-border: #7A2A22; --error-fg: #FFD9D3;
+      background: #0E1013; color: #E6E8EB; font-family: 'IBM Plex Sans', system-ui, sans-serif; color-scheme: dark;
+    }
+    .brand h1 { font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: .04em; }
+    .dry-run { background: #F5A142; color: #1A1206; letter-spacing: .06em; }
+    .card { gap: 22px; padding: 24px; border: 1px solid #252A30; border-radius: 16px; background: #15181C; }
+    .tool-title h2 { font-size: 22px; font-weight: 600; }
+    .chip { font-family: var(--mono); font-weight: 500; background: #3A2A12; color: #F5A142; }
+    .chip.closed { background: #23272D; color: #AEB5BD; }
+    .chip.running { color: #FFC27A; }
+    .toggle { font-size: 14px; color: #C3C9D0; }
+    .switch { width: 44px; height: 24px; border-radius: 12px; background: #2C323A; }
+    .switch::after { width: 18px; height: 18px; background: #C9CED4; }
+    .switch:checked { background: #F5A142; }
+    .switch:checked::after { background: #1A1206; }
+    .dial-body { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; }
+    .dial { position: relative; width: 200px; height: 200px; flex: none; }
+    .dial-center { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; text-align: center; }
+    .remaining { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -.01em; }
+    .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+    .usage { display: flex; flex-direction: column; gap: 6px; }
+    .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 13px; }
+    .track { height: 4px; }
+    .weekly-fill { background: #C9CED4; }
+    .weekly-reset { color: #8A939D; font-size: 12px; }
+    .stats { gap: 16px; border-top: 1px solid #252A30; padding-top: 18px; }
+    .stat { gap: 4px; }
+    dt { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
+    .stat-value { font-family: var(--mono); font-size: 16px; }
+    .last-result { font-size: 13px; }
+    .failed { color: #FF8A7A; }
+    .stoke { border: 1px solid #F5A142; border-radius: 10px; background: transparent; color: #F5A142; font-family: var(--mono); font-size: 14px; letter-spacing: .04em; }
+    .stoke:hover:not(:disabled) { background: #F5A142; color: #1A1206; }
+    .stoke:disabled { color: #C98A42; border-color: #926B42; }
+    .warning { display: flex; align-items: flex-start; gap: 10px; background: #3A1714; border: 1px solid #7A2A22; color: #FFD9D3; border-radius: 10px; padding: 12px 14px; }
+    .warning svg { flex: none; margin-top: 1px; }
+
+    @media (max-width: 480px) {
+      .header-tools { justify-content: flex-start; }
+      .card { padding: 20px; }
+      .dial-body { justify-content: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .switch, .switch::after { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <p id="error" role="alert" hidden></p>
+  <div id="app"></div>
+  <script>
+    'use strict';
+
+    // Shared core
+    const app = document.querySelector('#app');
+    const error = document.querySelector('#error');
+    const busy = new Set();
+    const HOURS = 5 * 3600;
+    const CIRCUMFERENCE = 2 * Math.PI * 86;
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const WARN = new Map([
+      ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
+      ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
+      ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']]
+    ]);
+    let state = null;
+    let clockOffset = 0;
+    let refreshId = 0;
+    let deferredFocus = null;
+    const now = () => Date.now() / 1000 + clockOffset;
+    const pad = value => String(value).padStart(2, '0');
+    const clamp = value => Math.min(1, Math.max(0, value));
+    function clock(value) {
+      if (value == null) return '—';
+      const date = new Date(value * 1000);
+      return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+    function dateText(value) {
+      const date = new Date(value * 1000);
+      return `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}`;
+    }
+    function when(value, current = now()) {
+      if (value == null) return '—';
+      const date = new Date(value * 1000), today = new Date(current * 1000);
+      // Calendar dates, rather than elapsed hours, stay correct across DST changes.
+      const day = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+      const days = Math.round((day(date) - day(today)) / 86400000);
+      if (days === 0) return `today ${clock(value)}`;
+      if (days === 1) return `tomorrow ${clock(value)}`;
+      return `${dateText(value)}, ${clock(value)}`;
+    }
+    function span(seconds) {
+      seconds = Math.max(0, Math.round(seconds));
+      const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600);
       const minutes = Math.floor(seconds % 3600 / 60);
-      element.textContent = seconds ? `${hours}h ${minutes}m ${seconds % 60}s` : 'closed';
-    });
-  }
-
-  function row(list, label, value) {
-    const title = document.createElement('dt');
-    const detail = document.createElement('dd');
-    title.textContent = label;
-    detail.textContent = value;
-    list.append(title, detail);
-    return detail;
-  }
-
-  async function post(name, action, body) {
-    const response = await fetch(`/api/tools/${encodeURIComponent(name)}/${action}`, {
-      method: 'POST', headers: { 'X-Stoke': '1', 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
-    if (!response.ok) {
-      const result = await response.json();
-      throw new Error(result.detail || `HTTP ${response.status}`);
+      if (days) return `${days}d ${hours}h`;
+      if (hours) return `${hours}h ${pad(minutes)}m`;
+      return `${minutes}m ${pad(seconds % 60)}s`;
     }
-    return response.json();
-  }
-
-  async function act(name, action, body) {
-    busy.add(name);
-    try {
-      error.textContent = '';
-      await post(name, action, body);
-    } catch (failure) {
-      error.textContent = failure.message;
-    } finally {
-      busy.delete(name);
-      await refresh();
-    }
-  }
-
-  function render(state) {
-    document.querySelector('#dry-run').hidden = !state.dry_run;
-    clockOffset = state.server_time - Date.now() / 1000;
-    tools.replaceChildren();
-    Object.values(state.tools).forEach(tool => {
-      const article = document.createElement('article');
-      const heading = document.createElement('h2');
-      heading.textContent = tool.label;
-      const auto = document.createElement('label');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = tool.auto_stoke;
-      checkbox.disabled = busy.has(tool.name);
-      checkbox.addEventListener('change', () => {
-        checkbox.disabled = true;
-        act(tool.name, 'auto', { enabled: checkbox.checked });
-      });
-      auto.append(checkbox, 'Auto-stoke');
-      const button = document.createElement('button');
-      button.textContent = tool.running ? 'Stoking…' : 'Stoke now';
-      button.disabled = tool.running || busy.has(tool.name);
-      button.addEventListener('click', () => {
-        button.disabled = true;
-        act(tool.name, 'stoke');
-      });
-      article.append(heading, auto, button);
-      const list = document.createElement('dl');
-      row(list, 'Window', tool.window_open ? 'open' : 'closed');
-      const five = row(list, 'Five-hour', tool.five_hour
-        ? `${tool.five_hour.used_percent.toFixed(1)}% · resets ${time(tool.five_hour.resets_at)} · ` : '—');
-      if (tool.five_hour) {
-        const remaining = document.createElement('span');
-        remaining.dataset.reset = tool.five_hour.resets_at;
-        five.append(remaining);
+    function view(tool, current = now()) {
+      const five = tool.five_hour, weekly = tool.weekly, last = tool.last_stoke;
+      const open = !!tool.window_open;
+      const start = five ? five.resets_at - HOURS : null;
+      const end = five ? five.resets_at : null;
+      const elapsed = open && five ? clamp((current - start) / HOURS) : 0;
+      const nextTs = tool.auto_stoke ? tool.next_stoke_at ?? null : null;
+      const remaining = open && five ? span(end - current) : '—';
+      let lastResult = '—';
+      if (last) {
+        if (!last.ok) lastResult = `Failed: ${last.error ?? '—'}`;
+        else if (last.opened_new_window === true) lastResult = 'Opened a new window';
+        else if (last.opened_new_window === false) lastResult = 'Did not open a new window';
+        else lastResult = 'Succeeded';
       }
-      row(list, 'Weekly', tool.weekly
-        ? `${tool.weekly.used_percent.toFixed(1)}% · resets ${time(tool.weekly.resets_at)}` : '—');
-      const last = tool.last_stoke;
-      row(list, 'Last stoke', last
-        ? `${time(last.at)} · ${last.trigger} · ${last.ok ? 'ok' : 'error: ' + last.error} · opened_new_window: ${last.opened_new_window === null ? 'not expected' : last.opened_new_window}` : '—');
-      row(list, 'Next stoke', time(tool.next_stoke_at));
-      row(list, 'Warning', tool.warning || 'none').className = 'warning';
-      article.append(list);
-      tools.append(article);
-    });
-    countdowns();
-  }
-
-  async function refresh() {
-    try {
-      const response = await fetch('/api/state', { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      render(await response.json());
-    } catch (failure) {
-      error.textContent = `State unavailable: ${failure.message}`;
+      const warning = tool.warning ? WARN.get(tool.warning) : null;
+      const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '';
+      const lastAgo = last ? `${span(current - last.at)} ago` : '';
+      const nextAt = nextTs != null ? clock(nextTs) : 'off';
+      const nextMeta = nextTs != null ? `in ${span(nextTs - current)}` : 'auto-stoke is off';
+      return {
+        name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
+        open, elapsed, remaining,
+        windowRange: five ? `${clock(start)} → ${clock(end)}` : '—',
+        fiveUsedNum: five?.used_percent ?? 0, fiveUsed: five ? `${Math.round(five.used_percent)}%` : '—',
+        weeklyNum: weekly?.used_percent ?? 0, weeklyUsed: weekly ? `${Math.round(weekly.used_percent)}%` : '—',
+        weeklyReset: weekly ? `resets ${when(weekly.resets_at, current)}` : '—',
+        lastTs: last?.at ?? null, lastAt: last ? clock(last.at) : '—',
+        lastMeta: last ? [last.trigger, lastDuration, lastAgo].filter(Boolean).join(' · ') : '—',
+        lastOk: !!last?.ok, lastResult, nextAt, nextMeta,
+        buttonText: tool.running ? 'Stoking…' : 'Stoke now',
+        dialStatus: tool.running ? 'Stoking…' : open ? 'Window open' : 'Window closed',
+        dialLabel: open && five ? `Window ${Math.round(elapsed * 100)}% elapsed, ${remaining} left` : 'Window closed',
+        dialCaption: open && five ? `left · ends ${clock(end)}` : 'window closed',
+        hasWarning: !!tool.warning, warning: warning ? warning[0] : tool.warning,
+        warningDetail: tool.warning ? `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.` : ''
+      };
     }
-  }
-  refresh();
-  setInterval(refresh, 5000);
-  setInterval(countdowns, 1000);
-</script>
+    function el(tag, className = '', text) {
+      const element = document.createElement(tag);
+      if (className) element.setAttribute('class', className);
+      if (text != null) element.textContent = text;
+      return element;
+    }
+    function svg(tag, attrs) {
+      const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+      return element;
+    }
+    function icon(kind) {
+      const flame = kind === 'flame';
+      const image = svg('svg', { width: flame ? 28 : 18, height: flame ? 28 : 18, viewBox: '0 0 24 24', fill: 'none', stroke: flame ? '#F5A142' : '#FF8A7A', 'stroke-width': flame ? 1.8 : 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+      const paths = flame ? ['M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1.2-3.6 2.4-4.6.3 1.6 1.1 2.6 2.1 3.1C11 8.8 11 5.8 12 3z'] : ['M12 3 2 20h20L12 3z', 'M12 10v4', 'M12 17h.01'];
+      paths.forEach(d => image.append(svg('path', { d })));
+      return image;
+    }
+    function live(element, field, tool) {
+      element.setAttribute('data-live', field);
+      if (tool) element.setAttribute('data-tool', tool.name);
+      return element;
+    }
+    function text(tag, className, tool, field) { return live(el(tag, className, tool[field]), field, tool); }
+    function badge(currentState) {
+      const element = el('span', 'dry-run', 'DRY RUN · no CLI calls');
+      element.setAttribute('id', 'dry-run');
+      element.hidden = !currentState?.dry_run;
+      return element;
+    }
+    function page(header) {
+      const outer = el('div', 'page'), wrap = el('div', 'wrap');
+      wrap.append(header, error);
+      outer.append(wrap);
+      return { outer, wrap };
+    }
+    function standardHeader(currentState) {
+      const header = el('header', 'header'), brand = el('div', 'brand');
+      brand.append(icon('flame'), el('h1', '', 'stoke'), badge(currentState));
+      const controls = el('div', 'header-tools');
+      controls.append(live(el('p', 'mono muted small'), 'dialClock'));
+      header.append(brand, controls);
+      return header;
+    }
+    function warning(tool) {
+      const box = el('div', 'warning'), copy = el('div');
+      box.append(icon('warning'));
+      copy.append(el('strong', '', tool.warning), el('br'), el('span', '', tool.warningDetail));
+      box.append(copy);
+      return box;
+    }
+    function autoControl(tool) {
+      const label = el('label', 'toggle'), input = el('input', 'switch');
+      input.setAttribute('type', 'checkbox');
+      input.setAttribute('data-key', `${tool.name}:auto`);
+      input.setAttribute('data-tool', tool.name);
+      input.setAttribute('aria-label', `Auto-stoke for ${tool.label}`);
+      input.checked = tool.auto;
+      input.disabled = busy.has(tool.name);
+      input.addEventListener('change', () => act(tool.name, 'auto', { enabled: input.checked }));
+      label.append(el('span', '', 'Auto-stoke'), input);
+      return label;
+    }
+    function stokeControl(tool) {
+      const button = el('button', 'stoke', tool.buttonText);
+      button.setAttribute('type', 'button');
+      button.setAttribute('data-key', `${tool.name}:stoke`);
+      button.setAttribute('data-tool', tool.name);
+      button.setAttribute('aria-label', `Stoke ${tool.label} now`);
+      button.disabled = tool.running || busy.has(tool.name);
+      button.addEventListener('click', () => act(tool.name, 'stoke'));
+      return button;
+    }
+    function toolTitle(tool) {
+      const title = el('div', 'tool-title');
+      title.append(el('h2', '', tool.label), text('span', `chip ${tool.running ? 'running' : tool.open ? '' : 'closed'}`, tool, 'dialStatus'));
+      return title;
+    }
+    function stat(list, title, tool, field) {
+      const item = el('div', 'stat');
+      item.append(el('dt', '', title), text('dd', 'stat-value', tool, field));
+      list.append(item);
+      return item;
+    }
+    function lastResult(tag, tool) { return el(tag, `last-result${!tool.lastOk && tool.lastTs != null ? ' failed' : ''}`, tool.lastResult); }
+    function syncControls() {
+      const tools = new Map(Object.values(state?.tools ?? {}).map(tool => [tool.name, tool]));
+      app.querySelectorAll('button[data-tool], input[data-tool]').forEach(control => {
+        const tool = tools.get(control.dataset.tool);
+        if (!tool) return;
+        control.disabled = busy.has(tool.name) || (control.tagName === 'BUTTON' && tool.running);
+        if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
+      });
+      restoreFocus(deferredFocus);
+    }
+    function restoreFocus(key) {
+      if (!key) return;
+      const control = Array.from(app.querySelectorAll('[data-key]')).find(element => element.dataset.key === key);
+      if (control && !control.disabled) {
+        control.focus({ preventScroll: true });
+        deferredFocus = null;
+      } else if (control) deferredFocus = key;
+    }
+    // A later focus choice supersedes a control temporarily disabled by an action.
+    document.addEventListener('focusin', event => {
+      if (event.target.dataset?.key !== deferredFocus) deferredFocus = null;
+    });
+    function showError(message) {
+      error.textContent = message;
+      error.hidden = !message;
+    }
+    async function post(name, action, body) {
+      const response = await fetch(`/api/tools/${encodeURIComponent(name)}/${action}`, {
+        method: 'POST', headers: { 'X-Stoke': '1', 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+      if (!response.ok) {
+        let detail;
+        try { detail = (await response.json()).detail; } catch (_) { /* Use the HTTP fallback. */ }
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+    }
+    async function act(name, action, body) {
+      if (busy.has(name)) return;
+      deferredFocus = document.activeElement?.dataset?.key ?? null;
+      busy.add(name);
+      syncControls();
+      try {
+        await post(name, action, body);
+        showError('');
+      } catch (failure) {
+        showError(failure.message);
+      } finally {
+        await refresh();
+        busy.delete(name);
+        syncControls();
+      }
+    }
+    async function refresh() {
+      const request = ++refreshId;
+      try {
+        const response = await fetch('/api/state', { cache: 'no-store' });
+        if (!response.ok) {
+          let detail;
+          try { detail = (await response.json()).detail; } catch (_) { /* Use the HTTP fallback. */ }
+          throw new Error(detail || `HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        if (request !== refreshId) return;
+        clockOffset = result.server_time - Date.now() / 1000;
+        state = result;
+        render();
+        if (error.textContent.startsWith('State unavailable')) showError('');
+      } catch (failure) {
+        if (request === refreshId) showError(`State unavailable: ${failure.message}`);
+      }
+    }
+    function render() {
+      const focusKey = document.activeElement?.dataset?.key ?? deferredFocus;
+      const vm = Object.values(state?.tools ?? {}).map(tool => view(tool));
+      app.replaceChildren(renderDial(state, vm));
+      tick();
+      restoreFocus(focusKey);
+    }
+    function tick() {
+      const current = now();
+      const vm = Object.values(state?.tools ?? {}).map(tool => view(tool, current));
+      const tools = new Map(vm.map(tool => [tool.name, tool]));
+      const clockText = `Raspberry Pi · synced ${clock(current)}`;
+      app.querySelectorAll('[data-live]').forEach(element => {
+        const field = element.dataset.live, tool = tools.get(element.dataset.tool);
+        if (field === 'arc') {
+          element.setAttribute('stroke-dasharray', `${(tool.elapsed * CIRCUMFERENCE).toFixed(1)} ${CIRCUMFERENCE.toFixed(1)}`);
+          element.setAttribute('stroke-opacity', tool.elapsed > 0 ? '1' : '0');
+        } else if (field === 'dialLabel') element.setAttribute('aria-label', tool.dialLabel);
+        else {
+          const value = tool ? tool[field] : clockText;
+          if (value != null && element.textContent !== String(value)) element.textContent = value;
+        }
+      });
+    }
+
+    // Dial
+    function renderDial(currentState, vm) {
+      const { outer, wrap } = page(standardHeader(currentState));
+      const main = el('main', 'cards');
+      vm.forEach(tool => {
+        const card = el('section', 'card');
+        if (tool.hasWarning) card.append(warning(tool));
+        const heading = el('div', 'card-heading');
+        heading.append(toolTitle(tool), autoControl(tool));
+        const body = el('div', 'dial-body'), dial = el('div', 'dial');
+        const ring = live(svg('svg', { width: 200, height: 200, viewBox: '0 0 200 200', role: 'img', 'aria-label': tool.dialLabel }), 'dialLabel', tool);
+        ring.append(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', stroke: '#252A30', 'stroke-width': 12 }));
+        ring.append(live(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', stroke: '#F5A142', 'stroke-width': 12, 'stroke-linecap': 'round', transform: 'rotate(-90 100 100)' }), 'arc', tool));
+        const center = el('div', 'dial-center');
+        center.append(text('span', 'remaining', tool, 'remaining'), text('span', 'small muted', tool, 'dialCaption'));
+        dial.append(ring, center);
+        const details = el('div', 'dial-details'), range = el('div', 'usage-label');
+        range.append(el('span', 'muted', 'Window'), text('span', 'mono', tool, 'windowRange'));
+        details.append(range, dialUsage(tool, false), dialUsage(tool, true));
+        body.append(dial, details);
+        const stats = el('dl', 'stats');
+        stat(stats, 'Last stoke', tool, 'lastAt').append(text('dd', 'small muted', tool, 'lastMeta'), lastResult('dd', tool));
+        stat(stats, 'Next stoke', tool, 'nextAt').append(text('dd', 'small muted', tool, 'nextMeta'));
+        card.append(heading, body, stats, stokeControl(tool));
+        main.append(card);
+      });
+      wrap.append(main);
+      return outer;
+    }
+    function dialUsage(tool, weekly) {
+      const group = el('div', 'usage'), label = el('div', 'usage-label');
+      label.append(el('span', 'muted', weekly ? 'Weekly use' : '5-hour use'), el('span', 'mono', weekly ? tool.weeklyUsed : tool.fiveUsed));
+      const track = el('div', 'track'), fill = el('div', weekly ? 'fill weekly-fill' : 'fill');
+      fill.style.width = `${clamp((weekly ? tool.weeklyNum : tool.fiveUsedNum) / 100) * 100}%`;
+      track.append(fill);
+      group.append(label, track);
+      if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
+      return group;
+    }
+
+    render();
+    refresh();
+    setInterval(refresh, 5000);
+    setInterval(tick, 1000);
+  </script>
+</body>
 </html>
