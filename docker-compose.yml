@@ -11,6 +11,11 @@ services:
       - codex-home:/home/stoke/.codex
     mem_limit: 512m
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
 
 volumes:
   codex-home:
