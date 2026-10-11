@@ -43,6 +43,7 @@ def test_state_shape_manual_result_health_and_page(
             "name": "claude", "label": "Claude", "auto_stoke": False, "running": False,
             "window_open": False, "five_hour": None, "weekly": None, "last_stoke": None,
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
+            "limits_at": None,
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}
@@ -51,6 +52,8 @@ def test_state_shape_manual_result_health_and_page(
             "opened_new_window": None, "duration_ms": 12,
         }
         assert result["window_open"] and not result["running"] and result["next_stoke_at"] is None
+        assert result["limits_at"] == 1000
+        assert client.get("/api/state").json()["tools"]["claude"]["limits_at"] == 1000
         assert client.get("/healthz").json() == {"ok": True}
         page = client.get("/")
         assert page.status_code == 200 and "text/html" in page.headers["content-type"]

@@ -48,6 +48,7 @@ class ToolState:
     next_stoke_at: int | None
     consecutive_failures: int
     warning: str | None
+    limits_at: int | None = None
 
 
 def serialize_tool(state: ToolState, now: int | None = None) -> dict[str, Any]:

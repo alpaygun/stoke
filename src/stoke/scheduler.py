@@ -154,6 +154,7 @@ class Scheduler:
                 else:
                     state.five_hour = result.five_hour
                     state.weekly = result.weekly
+                    state.limits_at = clock.now()
                     state.consecutive_failures = 0
                     state.last_stoke = StokeRecord(
                         attempt_at, trigger, True, None,

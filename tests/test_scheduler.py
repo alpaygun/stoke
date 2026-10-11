@@ -162,7 +162,36 @@ def test_manual_completion_wakes_and_replaces_pending_timer(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("error,warning", [(ProviderError("failed"), "stoke_failing"), (LimitsUnreadable("different text"), "limits_unreadable")])
+def test_success_sets_limits_at_to_completion_time(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = [1000]
+    async def scenario() -> None:
+        result = StokeResult(Window(2, 19000, 300), Window(14, 40000, 10080), 12)
+        provider = FakeProvider(result=result)
+        provider.release = asyncio.Event()
+        scheduler = make_scheduler(settings_factory(), provider)
+        state = scheduler.states["claude"]
+        state.limits_at = 900
+        attempt = asyncio.create_task(scheduler.stoke_now("claude", "manual"))
+        await provider.started.wait()
+        assert state.limits_at == 900
+        current[0] = 1012
+        provider.release.set()
+        await attempt
+        assert state.last_stoke.ok and state.last_stoke.at == 1000
+        assert state.limits_at == 1012
+        assert (state.five_hour, state.weekly) == (result.five_hour, result.weekly)
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"].limits_at == 1012
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("error,warning", [
+    (ProviderError("failed"), "stoke_failing"),
+    (LimitsUnreadable("different text"), "limits_unreadable"),
+    (ValueError("unexpected"), "stoke_failing"),
+])
 def test_failures_keep_windows_and_use_completion_time_for_backoff(
     error: Exception, warning: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -173,6 +202,7 @@ def test_failures_keep_windows_and_use_completion_time_for_backoff(
         scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
         state = scheduler.states["claude"]
         state.five_hour, state.weekly = Window(3, 999, 300), Window(4, 40000, 10080)
+        state.limits_at = 900
         previous = (state.five_hour, state.weekly)
         for count, expected_delay in [(1, 60), (2, 300), (3, 900)]:
             provider.started.clear()
@@ -185,6 +215,8 @@ def test_failures_keep_windows_and_use_completion_time_for_backoff(
             await attempt
             assert not state.running and state.last_stoke.ok is False
             assert (state.five_hour, state.weekly) == previous
+            assert state.limits_at == 900
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"].limits_at == 900
             assert state.consecutive_failures == count
             assert state.next_stoke_at == current[0] + expected_delay
         assert state.warning == warning
@@ -194,6 +226,7 @@ def test_failures_keep_windows_and_use_completion_time_for_backoff(
         await scheduler.stoke_now("claude", "manual")
         assert state.consecutive_failures == 0 and state.warning is None
         assert state.weekly is None
+        assert state.limits_at == current[0]
     monkeypatch.setattr("stoke.clock.now", lambda: current[0])
     asyncio.run(scenario())
 
