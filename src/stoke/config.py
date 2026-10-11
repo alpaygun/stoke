@@ -18,6 +18,7 @@ class Settings:
     delay_seconds: int
     retry_seconds: tuple[int, ...]
     timeout_seconds: float
+    refresh_seconds: int
     data_dir: Path
     host: str
     port: int
@@ -91,6 +92,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         delay_seconds=_integer(env.get("STOKE_DELAY_SECONDS", "90"), "STOKE_DELAY_SECONDS", 0),
         retry_seconds=retry,
         timeout_seconds=timeout,
+        refresh_seconds=_integer(env.get("STOKE_REFRESH_SECONDS", "900"), "STOKE_REFRESH_SECONDS", 60),
         data_dir=_path(env.get("STOKE_DATA_DIR", "/data"), "STOKE_DATA_DIR"),
         host=host,
         port=port,

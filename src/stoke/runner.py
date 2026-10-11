@@ -1,10 +1,11 @@
 """Execute fixed CLI arguments without a shell."""
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 
 @dataclass
@@ -25,6 +26,98 @@ class Runner(Protocol):
         self, argv: Sequence[str], cwd: Path, timeout_s: float,
         env: Mapping[str, str] | None = None,
     ) -> CommandResult: ...
+
+
+class RpcError(Exception):
+    """A safe app-server transport failure, containing no process output."""
+
+
+class RpcRunner(Protocol):
+    """Injectable line-JSON-RPC exchange."""
+
+    async def __call__(
+        self, argv: Sequence[str], cwd: Path, timeout_s: float,
+        env: Mapping[str, str] | None, initialize: dict[str, Any],
+        notifications: Sequence[dict[str, Any]], request: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
+async def _shutdown_rpc(process: asyncio.subprocess.Process) -> None:
+    """Let the wrapper close its native child before escalating shutdown."""
+    if process.stdin is not None:
+        process.stdin.close()
+    for signal in (process.terminate, process.kill):
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+            return
+        except TimeoutError:
+            if process.returncode is None:
+                try:
+                    signal()
+                except ProcessLookupError:
+                    pass
+    await process.wait()
+
+
+async def run_jsonrpc(
+    argv: Sequence[str], cwd: Path, timeout_s: float,
+    env: Mapping[str, str] | None, initialize: dict[str, Any],
+    notifications: Sequence[dict[str, Any]], request: dict[str, Any],
+) -> dict[str, Any]:
+    """Exchange JSONL messages and always close, then reap, the app-server."""
+    process: asyncio.subprocess.Process | None = None
+    try:
+        async with asyncio.timeout(timeout_s):
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *argv, cwd=cwd, env=None if env is None else dict(env),
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL, limit=1_048_576,
+                )
+            except OSError:
+                raise RpcError("could not be started") from None
+            assert process.stdin is not None and process.stdout is not None
+
+            async def write(message: dict[str, Any]) -> None:
+                assert process is not None and process.stdin is not None
+                process.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+                await process.stdin.drain()
+
+            async def response(expected_id: Any) -> dict[str, Any]:
+                assert process is not None and process.stdout is not None
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        raise RpcError("app-server exited before answering")
+                    try:
+                        value = json.loads(line)
+                    except (ValueError, UnicodeError, RecursionError):
+                        continue
+                    if isinstance(value, dict) and value.get("id") == expected_id:
+                        return value
+
+            await write(initialize)
+            await response(initialize["id"])
+            for notification in notifications:
+                await write(notification)
+            await write(request)
+            return await response(request["id"])
+    except TimeoutError:
+        raise RpcError("timed out") from None
+    except (BrokenPipeError, ConnectionResetError):
+        raise RpcError("app-server exited before answering") from None
+    finally:
+        if process is not None:
+            cleanup = asyncio.create_task(_shutdown_rpc(process))
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(cleanup)
+                    break
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
 
 
 async def run_command(

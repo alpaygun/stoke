@@ -7,7 +7,7 @@ from ..runner import Runner, run_command
 from .base import Provider
 from .claude import ClaudeProvider
 from .codex import CodexProvider
-from .dryrun import DryRunProvider
+from .dryrun import DryRunProvider, DryRunReader
 
 FACTORIES: dict[str, tuple[str, Callable[[Settings, Runner], Provider]]] = {
     "claude": ("Claude", ClaudeProvider),
@@ -20,7 +20,8 @@ def create_providers(settings: Settings, runner: Runner = run_command) -> dict[s
     providers: dict[str, Provider] = {}
     for name in settings.tools:
         label, factory = FACTORIES[name]
+        dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
         providers[name] = (
-            DryRunProvider(name, label, settings) if settings.dry_run else factory(settings, runner)
+            dry_factory(name, label, settings) if settings.dry_run else factory(settings, runner)
         )
     return providers

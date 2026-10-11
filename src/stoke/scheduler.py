@@ -5,20 +5,25 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal, Mapping, cast
 
 from . import clock, store
 from .config import Settings
-from .models import StokeRecord, StokeResult, ToolState, Window
-from .providers.base import LimitsUnreadable, Provider, ProviderError, short_error
+from .models import ResetCredits, StokeRecord, StokeResult, ToolState, Window
+from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, short_error
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup"]
 STALE_RESET_LIMIT = 4
+REFRESH_BUSY_RETRY_SECONDS = 10
 
 
 class AlreadyRunning(Exception):
-    """A tool already has an in-flight stoke."""
+    """A conflicting operation is already in flight for a tool."""
+
+
+class RefreshUnsupported(Exception):
+    """A tool has no official no-stoke limit reader."""
 
 
 def next_after_success(result: StokeResult, settings: Settings) -> int:
@@ -72,12 +77,17 @@ class Scheduler:
         settings: Settings, path: Path | None = None,
     ) -> None:
         self.providers = dict(providers)
+        self.readers = {
+            name: cast(LimitReader, provider) for name, provider in providers.items()
+            if callable(getattr(provider, "read_limits", None))
+        }
         self.states = states
         self.settings = settings
         self.path = path if path is not None else settings.data_dir / "state.json"
         self.locks = {name: asyncio.Lock() for name in providers}
         self.events = {name: asyncio.Event() for name in providers}
         self.tasks: dict[str, asyncio.Task[None]] = {}
+        self.refresh_tasks: dict[str, asyncio.Task[None]] = {}
         self._attempts: set[asyncio.Task[object]] = set()
         self._startup_pending = {name: False for name in providers}
 
@@ -97,6 +107,7 @@ class Scheduler:
             return
         for name, state in self.states.items():
             state.running = False
+            state.refreshing = False
             state.warning = compute_warning(state)
             if state.auto_stoke:
                 self._schedule_startup(name)
@@ -104,15 +115,74 @@ class Scheduler:
                 state.next_stoke_at = None
         self._persist()
         self.tasks = {name: asyncio.create_task(self._loop(name), name=f"stoke:{name}") for name in self.providers}
+        self.refresh_tasks = {
+            name: asyncio.create_task(self._refresh_loop(name), name=f"refresh:{name}") for name in self.readers
+        }
 
     async def stop(self) -> None:
         """Cancel loops and manual attempts, and wait for their cleanup."""
-        tasks = set(self.tasks.values()) | self._attempts
+        tasks = set(self.tasks.values()) | set(self.refresh_tasks.values()) | self._attempts
         tasks.discard(asyncio.current_task())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        self.refresh_tasks.clear()
+
+    def can_refresh(self, name: str) -> bool:
+        """Report the provider's optional read capability."""
+        return name in self.readers
+
+    async def refresh_limits(self, name: str) -> ToolState:
+        """Update usage only; a read must never determine stoke scheduling."""
+        if name not in self.readers:
+            raise RefreshUnsupported(name)
+        state = self.states[name]
+        if state.refreshing or state.running:
+            raise AlreadyRunning(name)
+        state.refreshing = True
+        task = asyncio.current_task()
+        if task is not None:
+            self._attempts.add(task)
+        try:
+            try:
+                snapshot = await self.readers[name].read_limits()
+            except ProviderError as error:
+                logger.warning("tool=%s refresh failed: %s", name, short_error(str(error)))
+                raise
+            except Exception as error:
+                logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
+                raise ProviderError("unexpected provider error") from None
+            now = clock.now()
+            if state.five_hour is not None:
+                state.five_hour = Window(
+                    snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
+                )
+            if snapshot.weekly is not None:
+                state.weekly = snapshot.weekly
+            state.limits_at = now
+            if snapshot.resets is not None:
+                state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
+            self._persist()
+            return state
+        finally:
+            state.refreshing = False
+            if task is not None:
+                self._attempts.discard(task)
+
+    async def _refresh_loop(self, name: str) -> None:
+        """Read at startup and each interval, surviving failures and overlap."""
+        while True:
+            delay = self.settings.refresh_seconds
+            try:
+                await self.refresh_limits(name)
+            except AlreadyRunning:
+                delay = REFRESH_BUSY_RETRY_SECONDS
+            except ProviderError:
+                pass
+            except Exception as error:
+                logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
+            await asyncio.sleep(delay)
 
     def set_auto(self, name: str, enabled: bool) -> ToolState:
         """Persist the switch and immediately wake the tool's waiting loop."""

@@ -8,7 +8,7 @@ import pytest
 
 from conftest import FakeProvider
 from stoke.config import Settings
-from stoke.models import StokeRecord, ToolState, Window, serialize_tool
+from stoke.models import ResetCredit, ResetCredits, StokeRecord, ToolState, Window, serialize_tool
 from stoke.store import load, save
 
 
@@ -53,7 +53,7 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
         assert state.limits_at is None
         assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0}
+        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None}
     assert "using defaults" not in caplog.text
 
 
@@ -155,3 +155,84 @@ def test_atomic_failure_preserves_previous_file_and_cleans_temp(
         save(path, states)
     assert path.read_bytes() == previous
     assert list(path.parent.iterdir()) == [path]
+
+
+def test_reset_credits_round_trip_and_refreshing_is_live_only(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    path = settings.data_dir / "state.json"
+    providers = {"codex": FakeProvider("codex")}
+    states = load(path, settings, providers)
+    state = states["codex"]
+    state.resets = ResetCredits(2, [ResetCredit("Full reset", None, 2000), ResetCredit("Limit reset", 100, 3000)], 1000)
+    state.refreshing = True
+    state.running = True
+    save(path, states)
+    persisted = json.loads(path.read_text(encoding="utf-8"))["codex"]
+    assert "refreshing" not in persisted and "running" not in persisted and "refreshable" not in persisted
+    api = serialize_tool(state, 1000, refreshable=True)
+    assert api["refreshing"] and api["running"] and api["refreshable"]
+    state.refreshing = state.running = False
+    assert load(path, settings, providers)["codex"] == state
+
+
+def test_old_state_without_resets_preserves_live_values(settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture) -> None:
+    settings = settings_factory()
+    path = settings.data_dir / "state.json"
+    providers = {"codex": FakeProvider("codex")}
+    state = ToolState("codex", "Codex", True, False, Window(17, 20000, 300), Window(45, 40000, 10080),
+                      StokeRecord(1000, "manual", True, None, True, 42), 20090, 2, "stoke_failing", 1002, 1)
+    save(path, {"codex": state})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["codex"]["resets"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    caplog.clear()
+    assert load(path, settings, providers)["codex"] == state
+    assert "using defaults" not in caplog.text
+
+
+def test_store_sanitizes_titles_and_sorts_loaded_credits(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    path = settings.data_dir / "state.json"
+    providers = {"codex": FakeProvider("codex")}
+    states = load(path, settings, providers)
+    states["codex"].resets = ResetCredits(3, [
+        ResetCredit(" \x00Full   reset\x7f ", 0, 3), ResetCredit("x" * 100, None, 2), ResetCredit("\t\n", 0, 1),
+    ], 0)
+    save(path, states)
+    assert load(path, settings, providers)["codex"].resets == ResetCredits(3, [
+        ResetCredit("Limit reset", 0, 1), ResetCredit("x" * 80, None, 2), ResetCredit("Full reset", 0, 3),
+    ], 0)
+
+
+@pytest.mark.parametrize("block", [[], "invalid", {},
+    {"available": True, "credits": [], "read_at": 0},
+    {"available": -1, "credits": [], "read_at": 0},
+    {"available": "1", "credits": [], "read_at": 0},
+    {"available": 1, "credits": [], "read_at": True},
+    {"available": 1, "credits": [], "read_at": -1},
+    {"available": 1, "credits": None, "read_at": 0},
+    {"available": 1, "credits": [None], "read_at": 0},
+    {"available": 1, "credits": [{"title": 1, "granted_at": None, "expires_at": 1}], "read_at": 0},
+    {"available": 1, "credits": [{"title": "Reset", "granted_at": True, "expires_at": 1}], "read_at": 0},
+    {"available": 1, "credits": [{"title": "Reset", "granted_at": -1, "expires_at": 1}], "read_at": 0},
+    {"available": 1, "credits": [{"title": "Reset", "granted_at": None, "expires_at": True}], "read_at": 0},
+    {"available": 1, "credits": [{"title": "Reset", "granted_at": None, "expires_at": -1}], "read_at": 0},
+    {"available": 1, "credits": [{"title": "Reset", "expires_at": 1}], "read_at": 0},
+])
+def test_invalid_resets_take_corrupt_file_path(
+    block: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    path = settings.data_dir / "state.json"
+    providers = {"codex": FakeProvider("codex")}
+    states = load(path, settings, providers)
+    states["codex"].auto_stoke = True
+    states["codex"].five_hour = Window(1, 20000, 300)
+    save(path, states)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["codex"]["resets"] = block
+    path.write_text(json.dumps(data), encoding="utf-8")
+    caplog.clear()
+    loaded = load(path, settings, providers)["codex"]
+    assert not loaded.auto_stoke and loaded.five_hour is None and loaded.resets is None
+    assert "using defaults" in caplog.text

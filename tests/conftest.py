@@ -7,7 +7,7 @@ from typing import Any, Callable
 import pytest
 
 from stoke.config import Settings, load_settings
-from stoke.models import StokeResult, Window
+from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window
 
 
 class FakeProvider:
@@ -30,6 +30,29 @@ class FakeProvider:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+class FakeReader(FakeProvider):
+    """A provider whose independent read can be controlled without I/O."""
+
+    def __init__(self) -> None:
+        super().__init__("codex")
+        self.read_result: LimitsSnapshot | Exception = LimitsSnapshot(
+            Window(8, 99999, 301), Window(29, 600000, 10080),
+            ResetCredits(1, [ResetCredit("Full reset", 10, 700000)], 0),
+        )
+        self.read_calls = 0
+        self.read_started = asyncio.Event()
+        self.read_release: asyncio.Event | None = None
+
+    async def read_limits(self) -> LimitsSnapshot:
+        self.read_calls += 1
+        self.read_started.set()
+        if self.read_release is not None:
+            await self.read_release.wait()
+        if isinstance(self.read_result, Exception):
+            raise self.read_result
+        return self.read_result
 
 
 @pytest.fixture(autouse=True)

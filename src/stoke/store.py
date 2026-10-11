@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import StokeRecord, ToolState, Window, serialize_tool
+from .models import ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,24 @@ def _record(value: Any) -> StokeRecord | None:
     )
 
 
+def _resets(value: Any) -> ResetCredits | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("credits"), list):
+        raise ValueError("invalid reset credits")
+    credits = []
+    for entry in value["credits"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("title"), str) or "granted_at" not in entry:
+            raise ValueError("invalid reset credit")
+        granted = entry["granted_at"]
+        credits.append(ResetCredit(
+            sanitize_reset_title(entry["title"]), None if granted is None else _int(granted),
+            _int(entry.get("expires_at")),
+        ))
+    credits.sort(key=lambda credit: credit.expires_at)
+    return ResetCredits(_int(value.get("available")), credits, _int(value.get("read_at")))
+
+
 def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[str, ToolState]:
     """Load enabled tools, falling back to defaults for missing or corrupt data."""
     defaults = {
@@ -82,6 +100,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 None if next_at is None else _int(next_at), _int(item["consecutive_failures"]), warning,
                 None if limits_at is None else _int(limits_at),
                 _int(item.get("stale_resets", 0)),
+                _resets(item.get("resets")),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
@@ -90,7 +109,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
 
 
 def save(path: Path, states: Mapping[str, ToolState]) -> None:
-    """Replace the state file atomically; never persist the live running flag."""
+    """Replace the state file atomically; never persist live operation flags."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:

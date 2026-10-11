@@ -1,0 +1,31 @@
+{
+  "ordinaryUsageAllowed": true,
+  "rateLimits": {
+    "limitId": "codex",
+    "primary": {"usedPercent": 0, "windowDurationMins": 300, "resetsAt": 1791757038},
+    "secondary": {"usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 1792307650},
+    "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+    "planType": "plus",
+    "rateLimitReachedType": null
+  },
+  "rateLimitsByLimitId": {
+    "codex": {
+      "limitId": "codex",
+      "primary": {"usedPercent": 0, "windowDurationMins": 300, "resetsAt": 1791757038},
+      "secondary": {"usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 1792307650},
+      "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+      "planType": "plus",
+      "rateLimitReachedType": null
+    }
+  },
+  "rateLimitResetCredits": {
+    "availableCount": 3,
+    "credits": [
+      {"id": "RateLimitResetCredit_fixture_late", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1790796490, "expiresAt": 1793388490, "title": "Full reset (Weekly + 5 hr)", "description": "Synthetic reset credit."},
+      {"id": "RateLimitResetCredit_fixture_first", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1790105290, "expiresAt": 1792697290, "title": "Full reset (Weekly + 5 hr)", "description": "Synthetic reset credit."},
+      {"id": "RateLimitResetCredit_fixture_middle", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1790450890, "expiresAt": 1793042890, "title": "Full reset (Weekly + 5 hr)", "description": "Synthetic reset credit."}
+    ]
+  },
+  "accountId": "fixture-account",
+  "rateLimitUpsell": null
+}

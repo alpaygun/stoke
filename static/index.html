@@ -86,14 +86,36 @@
     .stoke:disabled { color: #C98A42; border-color: #926B42; }
     .warning { display: flex; align-items: flex-start; gap: 10px; background: #3A1714; border: 1px solid #7A2A22; color: #FFD9D3; border-radius: 10px; padding: 12px 14px; }
     .warning svg { flex: none; margin-top: 1px; }
+    .actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+    .refresh { min-height: 44px; padding: 4px 10px; white-space: nowrap; border: 1px solid #2C323A; border-radius: 8px; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
+    .refresh:hover:not(:disabled) { border-color: #F5A142; color: #F5A142; }
+    .refresh:disabled { color: #6B737C; }
+    .resets { display: flex; flex-direction: column; gap: 0; border-top: 1px solid #252A30; padding-top: 18px; }
+    .resets-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; cursor: pointer; list-style: none; min-height: 32px; padding: 4px 0; border-radius: 6px; }
+    .resets-head::-webkit-details-marker { display: none; }
+    .resets-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    .resets-head:hover .resets-title { color: #C3C9D0; }
+    .resets-count { display: flex; align-items: baseline; gap: 10px; }
+    .resets-title { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
+    .chevron { display: inline-block; width: 10px; color: #8A939D; font-family: var(--mono); transition: transform .15s; }
+    .resets[open] .chevron { transform: rotate(90deg); }
+    .resets[open] .resets-head { margin-bottom: 10px; }
+    .soon-text { color: #F5A142; }
+    .reset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
+    .reset-item .mono { font-size: 13px; }
+    .reset-item.soon { background: #2B2113; box-shadow: inset 3px 0 0 #F5A142; }
+    .reset-item.soon .reset-when { color: #F5A142; }
+    .reset-note { font-size: 12px; color: #8A939D; margin-top: 10px; }
 
     @media (max-width: 480px) {
       .header-tools { justify-content: flex-start; }
       .card { padding: 20px; }
       .dial-body { justify-content: center; }
+      .actions { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .switch, .switch::after { transition: none; }
+      .switch, .switch::after, .chevron { transition: none; }
     }
   </style>
 </head>
@@ -107,6 +129,9 @@
     const app = document.querySelector('#app');
     const error = document.querySelector('#error');
     const busy = new Set();
+    const inFlightActions = new Map();
+    const expanded = new Set();
+    const RESET_SOON_SECONDS = 3 * 86400;
     const HOURS = 5 * 3600;
     const CIRCUMFERENCE = 2 * Math.PI * 86;
     const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -132,6 +157,11 @@
     function dateText(value) {
       const date = new Date(value * 1000);
       return `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}`;
+    }
+    function readTime(value, current = now()) {
+      const date = new Date(value * 1000), today = new Date(current * 1000);
+      const day = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+      return day(date) === day(today) ? clock(value) : `${dateText(value)}, ${clock(value)}`;
     }
     function when(value, current = now()) {
       if (value == null) return '—';
@@ -173,12 +203,11 @@
       const nextMeta = nextTs != null ? `in ${span(nextTs - current)}` : 'auto-stoke is off';
       let limitsAt = '';
       if (tool.limits_at != null) {
-        const date = new Date(tool.limits_at * 1000), today = new Date(current * 1000);
-        const day = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-        limitsAt = day(date) === day(today) ? `as of ${clock(tool.limits_at)}` : `as of ${dateText(tool.limits_at)}, ${clock(tool.limits_at)}`;
+        limitsAt = `as of ${readTime(tool.limits_at, current)}`;
       }
       return {
         name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
+        refreshable: !!tool.refreshable, refreshing: !!tool.refreshing, resets: tool.resets,
         open, elapsed, remaining,
         windowRange: five ? `${clock(start)} → ${clock(end)}` : '—',
         limitsAt,
@@ -264,10 +293,51 @@
       button.setAttribute('type', 'button');
       button.setAttribute('data-key', `${tool.name}:stoke`);
       button.setAttribute('data-tool', tool.name);
+      button.setAttribute('data-action', 'stoke');
       button.setAttribute('aria-label', `Stoke ${tool.label} now`);
       button.disabled = tool.running || busy.has(tool.name);
       button.addEventListener('click', () => act(tool.name, 'stoke'));
       return button;
+    }
+    function refreshControl(tool) {
+      const button = el('button', 'refresh', tool.refreshing || inFlightActions.get(tool.name) === 'refresh' ? 'Reading…' : '↻ Refresh usage');
+      button.setAttribute('type', 'button');
+      button.setAttribute('data-key', `${tool.name}:refresh`);
+      button.setAttribute('data-tool', tool.name);
+      button.setAttribute('data-action', 'refresh');
+      button.setAttribute('aria-label', `Read ${tool.label} usage now without stoking`);
+      button.setAttribute('title', 'Read usage and limit resets now. Sends no message and opens no window.');
+      button.disabled = tool.refreshing || tool.running || busy.has(tool.name);
+      button.addEventListener('click', () => act(tool.name, 'refresh'));
+      return button;
+    }
+    function resetCredits(tool, current = now()) {
+      const resets = tool.resets;
+      const box = el('details', 'resets'), head = el('summary', 'resets-head'), count = el('div', 'resets-count');
+      box.open = expanded.has(tool.name);
+      box.addEventListener('toggle', () => {
+        if (box.isConnected) box.open ? expanded.add(tool.name) : expanded.delete(tool.name);
+      });
+      head.setAttribute('data-key', `${tool.name}:resets`);
+      const sorted = [...resets.credits].sort((a, b) => a.expires_at - b.expires_at);
+      const first = sorted[0], soonFirst = first && first.expires_at - current < RESET_SOON_SECONDS;
+      count.append(el('span', 'chevron', '›'), el('span', 'resets-title', 'Limit resets'),
+        el('span', 'stat-value', resets.available ? `${resets.available} available` : 'none available'));
+      head.append(count);
+      if (first) head.append(el('span', `small ${soonFirst ? 'soon-text' : 'muted'}`,
+        `next expires ${when(first.expires_at, current)} · in ${span(first.expires_at - current)}`));
+      box.append(head);
+      const list = el('ul', 'reset-list');
+      sorted.forEach(credit => {
+        const left = credit.expires_at - current, soon = left < RESET_SOON_SECONDS;
+        const item = el('li', `reset-item${soon ? ' soon' : ''}`);
+        item.append(el('span', '', credit.title), el('span', 'mono reset-when',
+          `expires ${when(credit.expires_at, current)} · in ${span(left)}`));
+        list.append(item);
+      });
+      if (sorted.length) box.append(list);
+      box.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
+      return box;
     }
     function toolTitle(tool) {
       const title = el('div', 'tool-title');
@@ -286,7 +356,8 @@
       app.querySelectorAll('button[data-tool], input[data-tool]').forEach(control => {
         const tool = tools.get(control.dataset.tool);
         if (!tool) return;
-        control.disabled = busy.has(tool.name) || (control.tagName === 'BUTTON' && tool.running);
+        control.disabled = busy.has(tool.name) || (control.dataset.action === 'refresh' ? tool.refreshing || tool.running : control.dataset.action === 'stoke' && tool.running);
+        if (control.dataset.action === 'refresh') control.textContent = tool.refreshing || inFlightActions.get(tool.name) === 'refresh' ? 'Reading…' : '↻ Refresh usage';
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
       restoreFocus(deferredFocus);
@@ -322,6 +393,7 @@
       if (busy.has(name)) return;
       deferredFocus = document.activeElement?.dataset?.key ?? null;
       busy.add(name);
+      inFlightActions.set(name, action);
       syncControls();
       try {
         await post(name, action, body);
@@ -331,6 +403,7 @@
       } finally {
         await refresh();
         busy.delete(name);
+        inFlightActions.delete(name);
         syncControls();
       }
     }
@@ -401,7 +474,13 @@
         const stats = el('dl', 'stats');
         stat(stats, 'Last stoke', tool, 'lastAt').append(text('dd', 'small muted', tool, 'lastMeta'), lastResult('dd', tool));
         stat(stats, 'Next stoke', tool, 'nextAt').append(text('dd', 'small muted', tool, 'nextMeta'));
-        card.append(heading, body, stats, stokeControl(tool));
+        card.append(heading, body, stats);
+        if (tool.resets != null) card.append(resetCredits(tool));
+        if (tool.refreshable) {
+          const actions = el('div', 'actions');
+          actions.append(refreshControl(tool), stokeControl(tool));
+          card.append(actions);
+        } else card.append(stokeControl(tool));
         main.append(card);
       });
       wrap.append(main);

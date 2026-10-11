@@ -5,7 +5,7 @@ import math
 import re
 from typing import Any, Iterator, Protocol
 
-from ..models import StokeResult, Window
+from ..models import LimitsSnapshot, StokeResult, Window
 
 _SECRET = re.compile(r"sk-ant-[A-Za-z0-9_\-]+|eyJ[A-Za-z0-9_\-]{20,}")
 
@@ -21,7 +21,7 @@ def short_error(message: str) -> str:
 
 
 class ProviderError(Exception):
-    """A CLI stoke failed; its message is safe for persistence and the API."""
+    """A provider operation failed; its message is safe for logs and the API."""
 
     def __init__(self, message: str) -> None:
         super().__init__(short_error(message))
@@ -38,6 +38,15 @@ class Provider(Protocol):
     label: str
 
     async def stoke(self) -> StokeResult: ...
+
+
+class LimitReader(Protocol):
+    """Optional provider capability for no-stoke limit reads."""
+
+    name: str
+    label: str
+
+    async def read_limits(self) -> LimitsSnapshot: ...
 
 
 def json_objects(text: str) -> Iterator[dict[str, Any]]:

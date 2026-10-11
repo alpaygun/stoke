@@ -13,6 +13,8 @@ Works with Claude Code and Codex CLI. Runs in Docker (built for a Raspberry Pi, 
 - Only the official, unmodified CLIs talk to the vendors. Stoke never calls vendor APIs with your token.
 - A stoke costs a tiny fraction of the weekly limit; it does not raise any limit, it only shifts when windows start.
 
+For Codex, usage and available limit resets are read with the official `codex app-server` (`account/rateLimits/read`) at startup, every `STOKE_REFRESH_SECONDS` (900 seconds by default), and on demand from the panel. This sends no message and never spends a reset.
+
 ## Quick start (dry run)
 
 Dry run is on by default and never executes either CLI.

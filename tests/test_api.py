@@ -7,11 +7,11 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import FakeProvider
+from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings
 from stoke.models import Window
-from stoke.providers.base import LimitsUnreadable
+from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import Scheduler
 from stoke.store import load
 
@@ -44,6 +44,7 @@ def test_state_shape_manual_result_health_and_page(
             "window_open": False, "five_hour": None, "weekly": None, "last_stoke": None,
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
             "limits_at": None, "stale_resets": 0,
+            "refreshable": False, "refreshing": False, "resets": None,
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}
@@ -61,7 +62,7 @@ def test_state_shape_manual_result_health_and_page(
     assert not scheduler.tasks
 
 
-@pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/unknown"])
+@pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/api/tools/claude/refresh", "/unknown"])
 @pytest.mark.parametrize("headers", [{}, {"X-Stoke": "0"}])
 def test_every_post_requires_header(path: str, headers: dict[str, str], settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory()
@@ -69,7 +70,7 @@ def test_every_post_requires_header(path: str, headers: dict[str, str], settings
         assert client.post(path, headers=headers, json={"enabled": False}).status_code == 403
 
 
-@pytest.mark.parametrize("action", ["stoke", "auto"])
+@pytest.mark.parametrize("action", ["stoke", "auto", "refresh"])
 def test_unknown_tool_is_404(action: str, settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory()
     with TestClient(create_app(make_scheduler(settings), settings)) as client:
@@ -136,3 +137,77 @@ def test_failed_manual_stoke_returns_state_and_warning(settings_factory: Callabl
         assert response.status_code == 200
         assert response.json()["last_stoke"]["error"] == "limits unreadable"
         assert response.json()["warning"] == "limits_unreadable"
+
+
+def test_refresh_api_state_success_and_all_response_capabilities(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"codex": FakeReader(), "claude": FakeProvider()}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        app = create_app(scheduler, settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            before = (await client.get("/api/state")).json()["tools"]
+            assert before["codex"]["refreshable"] and not before["claude"]["refreshable"]
+            assert not before["codex"]["refreshing"] and before["codex"]["resets"] is None
+            response = await client.post("/api/tools/codex/refresh", headers=HEADERS)
+            assert response.status_code == 200
+            result = response.json()
+            assert result["refreshable"] and not result["refreshing"] and result["five_hour"] is None
+            assert result["limits_at"] == 1000
+            assert result["resets"] == {"available": 1, "credits": [{"title": "Full reset", "granted_at": 10, "expires_at": 700000}], "read_at": 1000}
+            assert (await client.get("/api/state")).json()["tools"]["codex"] == result
+            for action, body in [("stoke", None), ("auto", {"enabled": False})]:
+                response = await client.post(f"/api/tools/codex/{action}", headers=HEADERS, json=body)
+                assert response.status_code == 200 and response.json()["refreshable"]
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+def test_refresh_unsupported_returns_exact_detail(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    with TestClient(create_app(make_scheduler(settings), settings)) as client:
+        response = client.post("/api/tools/claude/refresh", headers=HEADERS)
+        assert response.status_code == 404 and response.json() == {"detail": "refresh not supported"}
+        unknown = client.post("/api/tools/unknown/refresh", headers=HEADERS)
+        assert unknown.status_code == 404 and unknown.json() == {"detail": "unknown tool"}
+
+
+@pytest.mark.parametrize("failure", [ProviderError("read denied sk-ant-fixture-secret"), LimitsUnreadable("limits unreadable"), ValueError("private text")])
+def test_refresh_failure_502_safe_detail(failure: Exception, settings_factory: Callable[..., Settings]) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader()
+        provider.read_result = failure
+        tools = {"codex": provider}
+        scheduler = Scheduler(tools, load(settings.data_dir / "state.json", settings, tools), settings)
+        app = create_app(scheduler, settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/tools/codex/refresh", headers=HEADERS)
+            assert response.status_code == 502
+            expected = str(failure) if isinstance(failure, ProviderError) else "unexpected provider error"
+            assert response.json() == {"detail": expected} and "sk-ant-" not in response.text
+            assert not scheduler.states["codex"].refreshing
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["refresh", "stoke"])
+def test_refresh_409_and_live_state_during_operation(operation: str, settings_factory: Callable[..., Settings]) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader()
+        provider.read_release = provider.release = asyncio.Event()
+        tools = {"codex": provider}
+        scheduler = Scheduler(tools, load(settings.data_dir / "state.json", settings, tools), settings)
+        app = create_app(scheduler, settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            first = asyncio.create_task(client.post(f"/api/tools/codex/{operation}", headers=HEADERS))
+            await (provider.read_started if operation == "refresh" else provider.started).wait()
+            state = (await client.get("/api/state")).json()["tools"]["codex"]
+            assert state["refreshable"] and state["refreshing"] is (operation == "refresh")
+            response = await client.post("/api/tools/codex/refresh", headers=HEADERS)
+            assert response.status_code == 409 and response.json() == {"detail": "already running"}
+            provider.release.set()
+            assert (await first).status_code == 200
+    asyncio.run(scenario())

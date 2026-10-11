@@ -2,22 +2,24 @@
 
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 
 from stoke.config import Settings
-from stoke.models import Window
+from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, Window, sanitize_reset_title
 from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError, parse_window, redact
 from stoke.providers.claude import ClaudeProvider, parse_claude_stream
 from stoke.providers.codex import (
     ARGV, DELETE_ARGV_PREFIX, CodexProvider, find_rollout, parse_codex_rollout,
     parse_codex_stream, remove_empty_session_dirs,
+    parse_rate_limits_response,
 )
-from stoke.providers.dryrun import DryRunProvider
-from stoke.runner import CommandResult
+from stoke.providers.dryrun import DryRunProvider, DryRunReader
+from stoke.runner import CommandResult, RpcError
 
 THREAD = "01a0fb98-c9b4-7fb2-8f00-e3fa3e33e1f5"
 
@@ -504,3 +506,166 @@ def test_dry_run_window_and_injected_failure(
     assert 1 <= delays[0] <= 2
     with pytest.raises(ProviderError, match="dry-run failure"):
         asyncio.run(DryRunProvider("codex", "Codex", settings, sleep).stoke())
+
+
+def test_rate_limits_real_shape_and_sorted_credits(fixture_text: Callable[[str], str]) -> None:
+    snapshot = parse_rate_limits_response(json.loads(fixture_text("codex_rate_limits.json")))
+    assert snapshot.five_hour == Window(0.0, 1791757038, 300)
+    assert snapshot.weekly == Window(7.0, 1792307650, 10080)
+    assert snapshot.resets is not None and snapshot.resets.available == 3 and snapshot.resets.read_at == 0
+    assert [credit.expires_at for credit in snapshot.resets.credits] == [1792697290, 1793042890, 1793388490]
+    assert all(set(asdict(credit)) == {"title", "granted_at", "expires_at"} for credit in snapshot.resets.credits)
+
+
+def test_reset_title_truncation_does_not_leave_trailing_whitespace() -> None:
+    assert sanitize_reset_title("x" * 79 + " y") == "x" * 79
+
+
+def test_reset_title_drops_unicode_format_characters() -> None:
+    assert sanitize_reset_title("Full\u202e reset\u200b") == "Full reset"
+    assert sanitize_reset_title("\u202e\u200b") == "Limit reset"
+
+
+@pytest.mark.parametrize("secondary", ["missing", None])
+def test_rate_limits_secondary_optional(secondary: Any, fixture_text: Callable[[str], str]) -> None:
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    if secondary == "missing":
+        del result["rateLimits"]["secondary"]
+    else:
+        result["rateLimits"]["secondary"] = secondary
+    assert parse_rate_limits_response(result).weekly is None
+
+
+@pytest.mark.parametrize("result", [None, [], {}, {"rateLimits": None}, {"rateLimits": {}}])
+def test_rate_limits_missing_primary(result: Any) -> None:
+    with pytest.raises(LimitsUnreadable, match="limits unreadable"):
+        parse_rate_limits_response(result)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("usedPercent", True), ("usedPercent", -1), ("usedPercent", 101),
+    ("usedPercent", "7"), ("usedPercent", float("nan")), ("usedPercent", float("inf")),
+    ("resetsAt", True), ("resetsAt", -1), ("resetsAt", "100"),
+    ("windowDurationMins", True), ("windowDurationMins", 0), ("windowDurationMins", "300"),
+])
+@pytest.mark.parametrize("window", ["primary", "secondary"])
+def test_rate_limits_invalid_window_values(
+    field: str, value: Any, window: str, fixture_text: Callable[[str], str],
+) -> None:
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    result["rateLimits"][window][field] = value
+    with pytest.raises(LimitsUnreadable):
+        parse_rate_limits_response(result)
+
+
+@pytest.mark.parametrize("block", ["missing", None, [], {},
+    {"availableCount": True}, {"availableCount": -1}, {"availableCount": 1.5}, {"availableCount": "3"},
+])
+def test_rate_limits_missing_or_invalid_credit_count(block: Any, fixture_text: Callable[[str], str]) -> None:
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    if block == "missing":
+        del result["rateLimitResetCredits"]
+    else:
+        result["rateLimitResetCredits"] = block
+    assert parse_rate_limits_response(result).resets is None
+
+
+def test_rate_limits_credit_entries_are_independently_sanitized(fixture_text: Callable[[str], str]) -> None:
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    result["rateLimitResetCredits"] = {"availableCount": 9, "credits": [
+        None, [], "junk", {}, {"status": "consumed", "expiresAt": 1},
+        {"status": "available", "expiresAt": True}, {"status": "available", "expiresAt": -1},
+        {"status": "available", "expiresAt": "1"}, {"status": "available"},
+        {"status": "available", "expiresAt": 4, "grantedAt": -1, "title": " \x00Full   reset\x7f  "},
+        {"status": "available", "expiresAt": 3, "grantedAt": True, "title": "\t\n"},
+        {"status": "available", "expiresAt": 2, "grantedAt": "1", "title": None},
+        {"status": "available", "expiresAt": 1, "grantedAt": 0, "title": "x" * 100},
+        {"status": "available", "expiresAt": 0},
+    ]}
+    resets = parse_rate_limits_response(result).resets
+    assert resets == ResetCredits(9, [
+        ResetCredit("Limit reset", None, 0), ResetCredit("x" * 80, 0, 1),
+        ResetCredit("Limit reset", None, 2), ResetCredit("Limit reset", None, 3),
+        ResetCredit("Full reset", None, 4),
+    ], 0)
+
+
+@pytest.mark.parametrize("entries", [None, {}, "invalid", []])
+def test_rate_limits_valid_zero_count_with_malformed_list(entries: Any, fixture_text: Callable[[str], str]) -> None:
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    result["rateLimitResetCredits"] = {"availableCount": 0, "credits": entries}
+    assert parse_rate_limits_response(result).resets == ResetCredits(0, [], 0)
+
+
+@pytest.mark.parametrize("timeout,expected", [(180, 30), (12, 12)])
+def test_codex_read_exact_allowed_messages_environment_and_workdir(
+    timeout: int, expected: int, settings_factory: Callable[..., Settings], fixture_text: Callable[[str], str],
+) -> None:
+    settings = settings_factory(STOKE_TIMEOUT_SECONDS=str(timeout), CLAUDE_CODE_OAUTH_TOKEN="synthetic-secret", CUSTOM="kept")
+    result = json.loads(fixture_text("codex_rate_limits.json"))
+    calls = []
+    async def rpc(
+        argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None,
+        initialize: dict[str, Any], notifications: Sequence[dict[str, Any]], request: dict[str, Any],
+    ) -> dict[str, Any]:
+        calls.append((argv, cwd, timeout_s, env, initialize, notifications, request))
+        return {"id": 1, "result": result}
+    snapshot = asyncio.run(CodexProvider(settings, rpc=rpc).read_limits())
+    assert snapshot == parse_rate_limits_response(result) and len(calls) == 1
+    argv, cwd, duration, env, initialize, notifications, request = calls[0]
+    assert argv == ("codex", "app-server") and cwd == settings.data_dir / "workdir" and cwd.is_dir()
+    assert duration == expected and env == {k: v for k, v in settings.process_env.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    assert settings.process_env["CLAUDE_CODE_OAUTH_TOKEN"] == "synthetic-secret"
+    assert initialize == {"method": "initialize", "id": 0, "params": {"clientInfo": {"name": "stoke", "title": "stoke", "version": "1"}}}
+    assert notifications == [{"method": "initialized"}]
+    assert request == {"method": "account/rateLimits/read", "id": 1}
+    assert [message["method"] for message in [initialize, *notifications, request]] == ["initialize", "initialized", "account/rateLimits/read"]
+    assert not settings.codex_home.exists()
+
+
+@pytest.mark.parametrize("response,expected", [
+    ({"id": 1, "error": {"message": "denied sk-ant-fixture-secret\n" + "x" * 300}}, "denied [REDACTED]"),
+    (RpcError("timed out"), "Codex usage read failed: timed out"),
+    (RpcError("could not be started"), "Codex usage read failed: could not be started"),
+])
+def test_codex_read_failures_are_safe(response: Any, expected: str, settings_factory: Callable[..., Settings]) -> None:
+    async def rpc(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        if isinstance(response, Exception):
+            raise response
+        return response
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(CodexProvider(settings_factory(), rpc=rpc).read_limits())
+    assert str(error.value).startswith(expected) and len(str(error.value)) <= 200
+    assert "sk-ant-" not in str(error.value) and "\n" not in str(error.value)
+
+
+def test_registry_dry_run_preserves_real_reader_capabilities(settings_factory: Callable[..., Settings]) -> None:
+    dry = create_providers(settings_factory())
+    real = create_providers(settings_factory(STOKE_DRY_RUN="0"))
+    assert isinstance(dry["codex"], DryRunReader)
+    assert not hasattr(dry["claude"], "read_limits")
+    assert callable(getattr(real["codex"], "read_limits"))
+    assert not hasattr(real["claude"], "read_limits")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_dry_run_reader_usage_credits_and_failure(
+    fail: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1791750000)
+    delays = []
+    async def sleep(seconds: float) -> None:
+        delays.append(seconds)
+    settings = settings_factory(STOKE_DRY_RUN_WINDOW_SECONDS="120", STOKE_DRY_RUN_FAIL="codex" if fail else "")
+    reader = DryRunReader("codex", "Codex", settings, sleep)
+    if fail:
+        with pytest.raises(ProviderError, match="dry-run failure"):
+            asyncio.run(reader.read_limits())
+    else:
+        snapshot = asyncio.run(reader.read_limits())
+        now = 1791750000
+        assert snapshot == LimitsSnapshot(Window(3, now + 120, 300), Window(27, now + 7 * 86400, 10080), ResetCredits(3, [
+            ResetCredit("Full reset (Weekly + 5 hr)", now + offset - 30 * 86400, now + offset)
+            for offset in (2 * 86400 + 5000, 18 * 86400, 26 * 86400)
+        ], 0))
+    assert delays == [1.0]
