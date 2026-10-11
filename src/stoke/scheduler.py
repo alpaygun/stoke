@@ -14,6 +14,7 @@ from .providers.base import LimitsUnreadable, Provider, ProviderError, short_err
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup"]
+STALE_RESET_LIMIT = 4
 
 
 class AlreadyRunning(Exception):
@@ -51,6 +52,8 @@ def opened_new_window(
 
 def compute_warning(state: ToolState) -> str | None:
     """Return the highest-priority problem from the latest attempt."""
+    if state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke:
+        return "auto_stopped"
     record = state.last_stoke
     if record is not None and record.opened_new_window is False:
         return "did_not_open_window"
@@ -115,7 +118,9 @@ class Scheduler:
         """Persist the switch and immediately wake the tool's waiting loop."""
         state = self.states[name]
         changed = state.auto_stoke != enabled
+        state.stale_resets = 0
         state.auto_stoke = enabled
+        state.warning = compute_warning(state)
         if not enabled:
             state.next_stoke_at = None
             self._startup_pending[name] = False
@@ -138,6 +143,7 @@ class Scheduler:
             attempt_at = clock.now()
             started = time.perf_counter()
             previous = state.five_hour
+            auto_stopped = state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke
             state.running = True
             self._startup_pending[name] = False
             try:
@@ -152,15 +158,24 @@ class Scheduler:
                     # Unexpected provider exceptions must not expose their potentially secret text.
                     self._record_failure(state, attempt_at, trigger, "unexpected provider error", started)
                 else:
-                    state.five_hour = result.five_hour
-                    state.weekly = result.weekly
-                    state.limits_at = clock.now()
-                    state.consecutive_failures = 0
-                    state.last_stoke = StokeRecord(
-                        attempt_at, trigger, True, None,
-                        opened_new_window(previous, attempt_at, result.five_hour), result.duration_ms,
-                    )
-                    state.next_stoke_at = next_after_success(result, self.settings) if state.auto_stoke else None
+                    completed_at = clock.now()
+                    if result.five_hour.resets_at <= completed_at:
+                        self._record_failure(
+                            state, attempt_at, trigger, "reset time not in the future", started, stale=True,
+                        )
+                    else:
+                        state.five_hour = result.five_hour
+                        state.weekly = result.weekly
+                        state.limits_at = completed_at
+                        state.consecutive_failures = 0
+                        state.stale_resets = 0
+                        if auto_stopped:
+                            state.auto_stoke = True
+                        state.last_stoke = StokeRecord(
+                            attempt_at, trigger, True, None,
+                            opened_new_window(previous, attempt_at, result.five_hour), result.duration_ms,
+                        )
+                        state.next_stoke_at = next_after_success(result, self.settings) if state.auto_stoke else None
                 self._startup_pending[name] = False
                 state.warning = compute_warning(state)
                 self._log_stoke(state)
@@ -174,13 +189,22 @@ class Scheduler:
 
     def _record_failure(
         self, state: ToolState, at: int, trigger: Trigger, error: str, started: float,
+        *, stale: bool = False,
     ) -> None:
+        state.stale_resets = (
+            state.stale_resets + 1
+            if stale and (state.auto_stoke or state.stale_resets >= STALE_RESET_LIMIT) else 0
+        )
         state.consecutive_failures += 1
         state.last_stoke = StokeRecord(at, trigger, False, short_error(error), None, int((time.perf_counter() - started) * 1000))
         state.next_stoke_at = (
             next_after_failure(clock.now(), state.consecutive_failures, self.settings)
             if state.auto_stoke else None
         )
+        if state.stale_resets >= STALE_RESET_LIMIT and state.auto_stoke:
+            state.auto_stoke = False
+            state.next_stoke_at = None
+            logger.error("tool=%s auto-stoke stopped: repeated stale reset times", state.name)
 
     def _log_stoke(self, state: ToolState) -> None:
         record = state.last_stoke

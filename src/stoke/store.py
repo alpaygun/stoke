@@ -72,7 +72,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 continue
             item = data[name]
             warning = item["warning"]
-            if warning not in {None, "did_not_open_window", "limits_unreadable", "stoke_failing"}:
+            if warning not in {None, "auto_stopped", "did_not_open_window", "limits_unreadable", "stoke_failing"}:
                 raise ValueError("invalid warning")
             next_at = item["next_stoke_at"]
             limits_at = item.get("limits_at")
@@ -81,6 +81,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 _window(item["five_hour"]), _window(item["weekly"]), _record(item["last_stoke"]),
                 None if next_at is None else _int(next_at), _int(item["consecutive_failures"]), warning,
                 None if limits_at is None else _int(limits_at),
+                _int(item.get("stale_resets", 0)),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):

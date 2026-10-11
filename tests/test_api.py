@@ -43,7 +43,7 @@ def test_state_shape_manual_result_health_and_page(
             "name": "claude", "label": "Claude", "auto_stoke": False, "running": False,
             "window_open": False, "five_hour": None, "weekly": None, "last_stoke": None,
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
-            "limits_at": None,
+            "limits_at": None, "stale_resets": 0,
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}

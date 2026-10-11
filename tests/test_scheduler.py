@@ -10,7 +10,7 @@ from conftest import FakeProvider
 from stoke.config import Settings
 from stoke.models import StokeRecord, StokeResult, ToolState, Window
 from stoke.providers.base import LimitsUnreadable, ProviderError
-from stoke.scheduler import AlreadyRunning, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
+from stoke.scheduler import STALE_RESET_LIMIT, AlreadyRunning, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
 
 
@@ -64,6 +64,267 @@ def test_warning_priority(opened: bool | None, error: str | None, failures: int,
     assert compute_warning(state) == expected
     state.last_stoke = None
     assert compute_warning(state) == ("stoke_failing" if failures >= 3 else None)
+
+
+@pytest.mark.parametrize("auto,stale,expected", [
+    (False, 3, "did_not_open_window"), (False, 4, "auto_stopped"),
+    (False, 5, "auto_stopped"), (True, 4, "did_not_open_window"),
+])
+def test_auto_stopped_warning_has_highest_priority(auto: bool, stale: int, expected: str) -> None:
+    state = ToolState("claude", "Claude", auto, False, None, None,
+                      StokeRecord(1000, "auto", False, "limits unreadable", False, 2),
+                      None, 4, None, stale_resets=stale)
+    assert compute_warning(state) == expected
+
+
+def test_stale_resets_keep_limits_back_off_and_stop_at_four(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    current = [1000]
+    async def scenario() -> None:
+        provider = FakeProvider()
+        provider.release = asyncio.Event()
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["claude"]
+        state.five_hour, state.weekly = Window(3, 999, 300), Window(4, 40000, 10080)
+        state.limits_at = 900
+        previous = (state.five_hour, state.weekly, state.limits_at)
+        assert STALE_RESET_LIMIT == 4
+        for count, delay in [(1, 60), (2, 300), (3, 900), (4, None), (5, None)]:
+            provider.result = StokeResult(Window(99, current[0] + 1, 300), None, 12)
+            provider.started.clear()
+            provider.release.clear()
+            attempt_at = current[0]
+            attempt = asyncio.create_task(scheduler.stoke_now("claude", "manual"))
+            await provider.started.wait()
+            current[0] += 2
+            provider.release.set()
+            await attempt
+            assert not state.running and not state.last_stoke.ok
+            assert state.last_stoke.at == attempt_at
+            assert state.last_stoke.error == "reset time not in the future"
+            assert state.last_stoke.opened_new_window is None
+            assert (state.five_hour, state.weekly, state.limits_at) == previous
+            assert state.consecutive_failures == count and state.stale_resets == count
+            assert state.next_stoke_at == (current[0] + delay if delay is not None else None)
+            assert state.auto_stoke is (count < 4)
+            assert state.warning == ("auto_stopped" if count >= 4 else "stoke_failing" if count == 3 else None)
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    caplog.set_level("ERROR", logger="stoke.scheduler")
+    asyncio.run(scenario())
+    errors = [record for record in caplog.records if record.name == "stoke.scheduler" and record.levelname == "ERROR"]
+    assert [record.getMessage() for record in errors] == ["tool=claude auto-stoke stopped: repeated stale reset times"]
+    assert all(record.exc_info is None and record.stack_info is None for record in errors)
+
+
+@pytest.mark.parametrize("reset,ok", [(999, False), (1000, False), (1001, True)])
+def test_stale_reset_boundary(
+    reset: int, ok: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        result = StokeResult(Window(2, reset, 300), None, 12)
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), FakeProvider(result=result))
+        state = await scheduler.stoke_now("claude", "auto")
+        assert state.last_stoke.ok is ok
+        assert state.stale_resets == (0 if ok else 1)
+        assert state.consecutive_failures == (0 if ok else 1)
+        assert state.last_stoke.error == (None if ok else "reset time not in the future")
+        assert state.next_stoke_at == (reset + scheduler.settings.delay_seconds if ok else 1060)
+        assert state.five_hour == (result.five_hour if ok else None)
+        assert state.limits_at == (1000 if ok else None)
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome,error,warning", [
+    (StokeResult(Window(2, 19000, 300), None, 12), None, None),
+    (ProviderError("reset time not in the future"), "reset time not in the future", "stoke_failing"),
+    (LimitsUnreadable("no limits"), "limits unreadable", "limits_unreadable"),
+    (ValueError("private text"), "unexpected provider error", "stoke_failing"),
+])
+def test_other_outcomes_break_stale_reset_streak(
+    outcome: StokeResult | Exception, error: str | None, warning: str | None,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(99, 999, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        for _ in range(2):
+            await scheduler.stoke_now("claude", "auto")
+        state = scheduler.states["claude"]
+        assert state.stale_resets == 2
+        provider.result = outcome
+        for count in range(3, 7):
+            await scheduler.stoke_now("claude", "auto")
+            assert state.stale_resets == 0 and state.auto_stoke
+            assert state.last_stoke.error == error and state.warning == warning
+            assert state.last_stoke.ok is (error is None)
+            assert state.consecutive_failures == (0 if error is None else count)
+            assert state.next_stoke_at == (19090 if error is None else next_after_failure(1000, count, scheduler.settings))
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reset,expected", [(999, 1000), (2000, 2090)])
+def test_enabling_auto_after_stop_resets_counter_and_schedules(
+    reset: int, expected: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(99, 999, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["claude"]
+        state.five_hour = Window(3, reset, 300)
+        for _ in range(4):
+            await scheduler.stoke_now("claude", "auto")
+        assert not state.auto_stoke and state.warning == "auto_stopped"
+        scheduler.set_auto("claude", True)
+        assert state.stale_resets == 0 and state.warning == "stoke_failing"
+        assert state.warning == compute_warning(state)
+        assert state.auto_stoke and state.next_stoke_at == expected
+        assert state.consecutive_failures == 4
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("previous_stale", [0, 2, 4])
+def test_user_disabling_auto_prevents_stale_manual_attempts_from_resuming_it(
+    previous_stale: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(99, 999, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["claude"]
+        state.five_hour, state.weekly = Window(3, 999, 300), Window(4, 40000, 10080)
+        state.limits_at = 900
+        previous = (state.five_hour, state.weekly, state.limits_at)
+        for _ in range(previous_stale):
+            await scheduler.stoke_now("claude", "auto")
+        assert state.stale_resets == previous_stale
+        if previous_stale == 4:
+            assert not state.auto_stoke and state.warning == "auto_stopped"
+        scheduler.set_auto("claude", False)
+        assert state.stale_resets == 0 and not state.auto_stoke
+        assert state.next_stoke_at is None
+        assert state.warning == ("stoke_failing" if previous_stale == 4 else None)
+        assert state.warning == compute_warning(state)
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+        for count in range(1, 5):
+            await scheduler.stoke_now("claude", "manual")
+            assert state.stale_resets == 0 and not state.auto_stoke
+            assert state.next_stoke_at is None
+            assert state.consecutive_failures == previous_stale + count
+            assert not state.last_stoke.ok and state.last_stoke.error == "reset time not in the future"
+            assert state.last_stoke.opened_new_window is None
+            assert (state.five_hour, state.weekly, state.limits_at) == previous
+            assert state.warning == ("stoke_failing" if previous_stale + count >= 3 else None)
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+        provider.result = StokeResult(Window(2, 19000, 300), None, 12)
+        await scheduler.stoke_now("claude", "manual")
+        assert state.last_stoke.ok and not state.auto_stoke and state.next_stoke_at is None
+        assert state.stale_resets == 0 and state.consecutive_failures == 0 and state.warning is None
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("trigger", ["manual", "auto", "startup"])
+def test_success_after_auto_stop_resumes_but_user_disabled_tool_stays_off(
+    trigger: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(99, 999, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        for _ in range(4):
+            await scheduler.stoke_now("claude", "auto")
+        state = scheduler.states["claude"]
+        assert not state.auto_stoke and state.stale_resets == 4
+        await scheduler.stoke_now("claude", "manual")
+        assert not state.auto_stoke and state.stale_resets == 5
+        assert state.warning == "auto_stopped" and state.next_stoke_at is None
+        provider.result = StokeResult(Window(2, 19000, 300), None, 12)
+        await scheduler.stoke_now("claude", trigger)
+        assert state.auto_stoke and state.next_stoke_at == 19090
+        assert state.stale_resets == 0 and state.consecutive_failures == 0 and state.warning is None
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+        scheduler.set_auto("claude", False)
+        await scheduler.stoke_now("claude", "manual")
+        assert not state.auto_stoke and state.next_stoke_at is None
+        assert state.stale_resets == 0 and state.warning is None
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    asyncio.run(scenario())
+
+
+def test_stale_reset_loop_stops_after_four_and_stays_idle_after_restart(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = [1000]
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(99, 999, 300), None, 12))
+        provider.release = asyncio.Event()
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        original_wait_for = asyncio.wait_for
+        timers: asyncio.Queue[float] = asyncio.Queue()
+        idle = asyncio.Event()
+        event = scheduler.events["claude"]
+        original_wait = event.wait
+
+        async def observe_timer(awaitable: Awaitable[bool], timeout: float) -> bool:
+            timers.put_nowait(timeout)
+            return await original_wait_for(awaitable, timeout)
+
+        async def observe_idle() -> bool:
+            if not scheduler.states["claude"].auto_stoke:
+                idle.set()
+            return await original_wait()
+
+        monkeypatch.setattr("stoke.scheduler.asyncio.wait_for", observe_timer)
+        monkeypatch.setattr(event, "wait", observe_idle)
+        await scheduler.start()
+        try:
+            for count, delay in [(1, 60), (2, 300), (3, 900), (4, None)]:
+                await original_wait_for(provider.started.wait(), 0.5)
+                assert provider.calls == count
+                provider.started.clear()
+                provider.release.set()
+                if delay is not None:
+                    assert await original_wait_for(timers.get(), 0.5) == delay
+                    assert scheduler.states["claude"].next_stoke_at == current[0] + delay
+                    provider.release.clear()
+                    current[0] += delay
+                    event.set()
+                else:
+                    await original_wait_for(idle.wait(), 0.5)
+            state = scheduler.states["claude"]
+            assert state.stale_resets == 4 and state.warning == "auto_stopped"
+            assert state.next_stoke_at is None and not state.auto_stoke
+            assert provider.calls == 4 and not scheduler.tasks["claude"].done()
+            idle.clear()
+            current[0] += 86400
+            event.set()
+            await original_wait_for(idle.wait(), 0.5)
+            assert provider.calls == 4 and timers.empty()
+        finally:
+            await scheduler.stop()
+        scheduler = Scheduler(scheduler.providers, load(scheduler.path, scheduler.settings, scheduler.providers), scheduler.settings)
+        idle.clear()
+        original_wait = scheduler.events["claude"].wait
+        monkeypatch.setattr(scheduler.events["claude"], "wait", observe_idle)
+        await scheduler.start()
+        try:
+            await original_wait_for(idle.wait(), 0.5)
+            assert provider.calls == 4 and timers.empty()
+            assert scheduler.states["claude"].warning == "auto_stopped"
+            assert not scheduler.states["claude"].auto_stoke
+            assert scheduler.states["claude"].next_stoke_at is None
+        finally:
+            await scheduler.stop()
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    asyncio.run(scenario())
 
 
 def test_startup_with_stored_future_window_schedules(

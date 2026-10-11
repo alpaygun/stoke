@@ -13,12 +13,13 @@ from stoke.store import load, save
 
 
 @pytest.mark.parametrize("limits_at", [None, 0, 1002])
+@pytest.mark.parametrize("stale_resets", [0, 1, 4])
 def test_store_round_trip_and_running_not_persisted(
-    limits_at: int | None, settings_factory: Callable[..., Settings],
+    limits_at: int | None, stale_resets: int, settings_factory: Callable[..., Settings],
 ) -> None:
     settings = settings_factory()
     state = ToolState("claude", "Claude", True, True, Window(17, 20000, 300), Window(45, 40000, 10080),
-                      StokeRecord(1000, "manual", True, None, True, 42), 20090, 0, None, limits_at)
+                      StokeRecord(1000, "manual", True, None, True, 42), 20090, 0, None, limits_at, stale_resets)
     path = settings.data_dir / "state.json"
     save(path, {"claude": state})
     data = json.loads(path.read_text())
@@ -29,7 +30,7 @@ def test_store_round_trip_and_running_not_persisted(
     assert loaded == state
 
 
-def test_v020_state_without_limits_at_preserves_all_values(
+def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
     settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
 ) -> None:
     settings = settings_factory()
@@ -50,14 +51,16 @@ def test_v020_state_without_limits_at_preserves_all_values(
     states = load(path, settings, {"claude": FakeProvider(), "codex": FakeProvider("codex")})
     for name, state in states.items():
         assert state.limits_at is None
+        assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None}
+        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0}
     assert "using defaults" not in caplog.text
 
 
 @pytest.mark.parametrize("limits_at", ["1002", -1, True, 1.5, [], {}])
-def test_invalid_limits_at_resets_all_tools_to_defaults(
-    limits_at: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize("field", ["limits_at", "stale_resets"])
+def test_invalid_integer_field_resets_all_tools_to_defaults(
+    limits_at: object, field: str, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
 ) -> None:
     settings = settings_factory()
     path = settings.data_dir / "state.json"
@@ -68,7 +71,7 @@ def test_invalid_limits_at_resets_all_tools_to_defaults(
     }
     save(path, states)
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["codex"]["limits_at"] = limits_at
+    data["codex"][field] = limits_at
     path.write_text(json.dumps(data), encoding="utf-8")
     loaded = load(path, settings, {"claude": FakeProvider(), "codex": FakeProvider("codex")})
     assert loaded == {
@@ -77,6 +80,33 @@ def test_invalid_limits_at_resets_all_tools_to_defaults(
     }
     assert all(state.limits_at is None for state in loaded.values())
     assert "using defaults" in caplog.text
+
+
+def test_null_stale_resets_is_corrupt(settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture) -> None:
+    settings = settings_factory()
+    path = settings.data_dir / "state.json"
+    providers = {"claude": FakeProvider()}
+    states = load(path, settings, providers)
+    states["claude"].auto_stoke = True
+    save(path, states)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["claude"]["stale_resets"] = None
+    path.write_text(json.dumps(data), encoding="utf-8")
+    caplog.clear()
+    loaded = load(path, settings, providers)["claude"]
+    assert not loaded.auto_stoke and loaded.stale_resets == 0
+    assert "using defaults" in caplog.text
+
+
+def test_auto_stopped_warning_loads(settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture) -> None:
+    settings = settings_factory(STOKE_AUTO_DEFAULT="1")
+    path = settings.data_dir / "state.json"
+    state = ToolState("claude", "Claude", False, False, Window(17, 999, 300), None,
+                      StokeRecord(1000, "auto", False, "reset time not in the future", None, 42),
+                      None, 4, "auto_stopped", 900, 4)
+    save(path, {"claude": state})
+    assert load(path, settings, {"claude": FakeProvider()})["claude"] == state
+    assert "using defaults" not in caplog.text
 
 
 @pytest.mark.parametrize("contents", [None, "{broken", "[]", '{"claude":{}}',

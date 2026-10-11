@@ -112,6 +112,7 @@
     const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const WARN = new Map([
+      ['auto_stopped', ['Auto-stoke stopped', 'The CLI kept reporting a reset time in the past, so auto-stoke was switched off to avoid repeated messages. Turn auto-stoke on or press Stoke now to resume.']],
       ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
       ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']]
