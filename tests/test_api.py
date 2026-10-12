@@ -36,8 +36,9 @@ def test_state_shape_manual_result_health_and_page(
         response = client.get("/api/state")
         assert response.status_code == 200
         state = response.json()
-        assert set(state) == {"dry_run", "server_time", "tools"}
+        assert set(state) == {"dry_run", "server_time", "timezone", "tools"}
         assert state["dry_run"] is True and state["server_time"] == 1000
+        assert state["timezone"] == "Europe/Istanbul"
         tool = state["tools"]["claude"]
         assert tool == {
             "name": "claude", "label": "Claude", "auto_stoke": False, "running": False,
@@ -45,6 +46,8 @@ def test_state_shape_manual_result_health_and_page(
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
             "limits_at": None, "stale_resets": 0,
             "refreshable": False, "refreshing": False, "resets": None,
+            "plan": None, "plan_outcome": None, "upcoming_at": None,
+            "upcoming_planned": False, "quiet_from": None,
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}
@@ -62,7 +65,7 @@ def test_state_shape_manual_result_health_and_page(
     assert not scheduler.tasks
 
 
-@pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/api/tools/claude/refresh", "/unknown"])
+@pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/api/tools/claude/refresh", "/api/tools/claude/plan", "/api/tools/claude/plan/cancel", "/unknown"])
 @pytest.mark.parametrize("headers", [{}, {"X-Stoke": "0"}])
 def test_every_post_requires_header(path: str, headers: dict[str, str], settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory()
@@ -70,7 +73,7 @@ def test_every_post_requires_header(path: str, headers: dict[str, str], settings
         assert client.post(path, headers=headers, json={"enabled": False}).status_code == 403
 
 
-@pytest.mark.parametrize("action", ["stoke", "auto", "refresh"])
+@pytest.mark.parametrize("action", ["stoke", "auto", "refresh", "plan", "plan/cancel"])
 def test_unknown_tool_is_404(action: str, settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory()
     with TestClient(create_app(make_scheduler(settings), settings)) as client:
@@ -210,4 +213,120 @@ def test_refresh_409_and_live_state_during_operation(operation: str, settings_fa
             assert response.status_code == 409 and response.json() == {"detail": "already running"}
             provider.release.set()
             assert (await first).status_code == 200
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("repeat", ["once", "daily"])
+@pytest.mark.parametrize("auto_after", [None, True, False])
+def test_plan_set_state_and_cancel(
+    repeat: str, auto_after: bool | None, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.post("/api/tools/claude/plan", headers=HEADERS, json={"time": "07:00", "repeat": repeat, "auto_after": auto_after})
+        assert response.status_code == 200
+        tool = response.json()
+        assert tool["plan"] == {"time": "07:00", "repeat": repeat, "auto_after": auto_after, "target_at": 18000, "retry_at": None}
+        assert tool["plan_shifted"] is False
+        assert tool["upcoming_at"] == 18000 and tool["upcoming_planned"] is True
+        assert tool["quiet_from"] == 0 and tool["next_stoke_at"] is None
+        assert load(scheduler.path, settings, scheduler.providers)["claude"].plan == scheduler.states["claude"].plan
+        state = client.get("/api/state").json()
+        assert state["timezone"] == settings.timezone.key
+        assert state["tools"]["claude"] == {key: value for key, value in tool.items() if key != "plan_shifted"}
+        cancelled = client.post("/api/tools/claude/plan/cancel", headers=HEADERS)
+        assert cancelled.status_code == 200
+        assert cancelled.json()["plan"] is None and cancelled.json()["quiet_from"] is None
+        assert cancelled.json()["upcoming_at"] is None and not cancelled.json()["upcoming_planned"]
+        assert load(scheduler.path, settings, scheduler.providers)["claude"].plan is None
+        assert client.post("/api/tools/claude/plan/cancel", headers=HEADERS).status_code == 200
+
+
+@pytest.mark.parametrize("body", [
+    {}, [], True, None,
+    {"time": "07:00", "repeat": "daily"},
+    {"time": "7:00", "repeat": "daily", "auto_after": None},
+    {"time": "24:00", "repeat": "daily", "auto_after": None},
+    {"time": "07:60", "repeat": "daily", "auto_after": None},
+    {"time": "07:00\n", "repeat": "daily", "auto_after": None},
+    {"time": 700, "repeat": "daily", "auto_after": None},
+    {"time": "07:00", "repeat": "weekly", "auto_after": None},
+    {"time": "07:00", "repeat": [], "auto_after": None},
+    {"time": "07:00", "repeat": "daily", "auto_after": 1},
+    {"time": "07:00", "repeat": "daily", "auto_after": "true"},
+    {"time": "07:00", "repeat": "daily", "auto_after": None, "extra": True},
+])
+def test_plan_strict_body_validation(body: object, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    with TestClient(create_app(scheduler, settings)) as client:
+        assert client.post("/api/tools/claude/plan", headers=HEADERS, json=body).status_code == 422
+        assert client.post("/api/tools/claude/plan", headers=HEADERS, content="invalid").status_code == 422
+        assert scheduler.states["claude"].plan is None
+
+
+def test_plan_shifted_response(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    scheduler.states["claude"].five_hour = Window(1, 18001, 300)
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.post("/api/tools/claude/plan", headers=HEADERS, json={"time": "07:00", "repeat": "once", "auto_after": True})
+        assert response.status_code == 200 and response.json()["plan_shifted"]
+        assert response.json()["plan"]["target_at"] == 104400
+
+
+def test_stoke_plan_conflict_body_and_break(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    scheduler.set_plan("claude", "07:00", "once", True)
+    with TestClient(create_app(scheduler, settings)) as client:
+        for body in [None, {}, {"break_plan": False}]:
+            response = client.post("/api/tools/claude/stoke", headers=HEADERS, json=body)
+            assert response.status_code == 409
+            assert response.json() == {"detail": "stoke would break the plan", "code": "plan_conflict", "plan_target_at": 18000}
+            assert scheduler.providers["claude"].calls == 0
+        response = client.post("/api/tools/claude/stoke", headers=HEADERS, json={"break_plan": True})
+        assert response.status_code == 200 and response.json()["last_stoke"]["ok"]
+        assert response.json()["plan"] is None and not response.json()["auto_stoke"]
+        assert response.json()["plan_outcome"] == {"target_at": 18000, "result": "broken", "at": 1000}
+
+
+@pytest.mark.parametrize("body", [None, {}, {"break_plan": False}, {"break_plan": True}])
+def test_stoke_optional_body_without_plan(body: object, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    with TestClient(create_app(make_scheduler(settings), settings)) as client:
+        response = client.post("/api/tools/claude/stoke", headers=HEADERS, json=body)
+        assert response.status_code == 200 and response.json()["last_stoke"]["ok"]
+        assert client.post("/api/tools/claude/stoke", headers=HEADERS, content="").status_code == 200
+
+
+@pytest.mark.parametrize("body", [{"break_plan": 1}, {"break_plan": "true"}, {"break_plan": None}, [], True])
+def test_stoke_break_requires_bool(body: object, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    with TestClient(create_app(make_scheduler(settings), settings)) as client:
+        assert client.post("/api/tools/claude/stoke", headers=HEADERS, json=body).status_code == 422
+
+
+def test_running_conflict_stays_unchanged_with_plan(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeProvider()
+        provider.release = asyncio.Event()
+        scheduler = make_scheduler(settings, provider)
+        app = create_app(scheduler, settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            task = asyncio.create_task(client.post("/api/tools/claude/stoke", headers=HEADERS))
+            await provider.started.wait()
+            scheduler.set_plan("claude", "07:00", "daily", None)
+            response = await client.post("/api/tools/claude/stoke", headers=HEADERS, json={"break_plan": True})
+            assert response.status_code == 409 and response.json() == {"detail": "stoke already running"}
+            provider.release.set()
+            await task
+            assert scheduler.states["claude"].plan_outcome is None
     asyncio.run(scenario())

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool
+from .models import Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def _window(value: Any) -> Window | None:
 def _record(value: Any) -> StokeRecord | None:
     if value is None:
         return None
-    if value["trigger"] not in {"auto", "manual", "startup"}:
+    if value["trigger"] not in {"auto", "manual", "startup", "planned"}:
         raise ValueError("invalid trigger")
     error = value["error"]
     if error is not None and not isinstance(error, str):
@@ -73,6 +73,27 @@ def _resets(value: Any) -> ResetCredits | None:
     return ResetCredits(_int(value.get("available")), credits, _int(value.get("read_at")))
 
 
+def _plan(value: Any) -> Plan | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("invalid plan")
+    validate_plan(value["time"], value["repeat"], value["auto_after"])
+    retry = value["retry_at"]
+    return Plan(
+        value["time"], value["repeat"], value["auto_after"], _int(value["target_at"]),
+        None if retry is None else _int(retry),
+    )
+
+
+def _plan_outcome(value: Any) -> PlanOutcome | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or value["result"] not in {"done", "missed", "broken"}:
+        raise ValueError("invalid plan outcome")
+    return PlanOutcome(_int(value["target_at"]), value["result"], _int(value["at"]))
+
+
 def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[str, ToolState]:
     """Load enabled tools, falling back to defaults for missing or corrupt data."""
     defaults = {
@@ -101,6 +122,8 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 None if limits_at is None else _int(limits_at),
                 _int(item.get("stale_resets", 0)),
                 _resets(item.get("resets")),
+                plan=_plan(item.get("plan")),
+                plan_outcome=_plan_outcome(item.get("plan_outcome")),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
