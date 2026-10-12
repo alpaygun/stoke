@@ -71,11 +71,11 @@
     .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
     .usage { display: flex; flex-direction: column; gap: 6px; }
     .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 13px; }
-    .limits-at { font-size: 12px; }
     .track { height: 4px; }
     .weekly-fill { background: #C9CED4; }
     .weekly-reset { color: #8A939D; font-size: 12px; }
     .stats { gap: 16px; border-top: 1px solid #252A30; padding-top: 18px; }
+    .card > .stats { margin-top: auto; }
     .stat { gap: 4px; }
     dt { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
     .stat-value { font-family: var(--mono); font-size: 16px; }
@@ -164,7 +164,10 @@
     function readTime(value, current = now()) {
       const date = new Date(value * 1000), today = new Date(current * 1000);
       const day = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-      return day(date) === day(today) ? clock(value) : `${dateText(value)}, ${clock(value)}`;
+      const days = Math.round((day(today) - day(date)) / 86400000);
+      if (days === 0) return clock(value);
+      if (days === 1) return `yesterday ${clock(value)}`;
+      return `${dateText(value)}, ${clock(value)}`;
     }
     function when(value, current = now()) {
       if (value == null) return '—';
@@ -206,7 +209,7 @@
       const nextMeta = nextTs != null ? `in ${span(nextTs - current)}` : 'auto-stoke is off';
       let limitsAt = '';
       if (tool.limits_at != null) {
-        limitsAt = `as of ${readTime(tool.limits_at, current)}`;
+        limitsAt = `usage as of ${readTime(tool.limits_at, current)}`;
       }
       return {
         name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
@@ -510,13 +513,13 @@
     function dialUsage(tool, weekly) {
       const group = el('div', 'usage'), label = el('div', 'usage-label');
       const usage = el('span', 'mono', weekly ? tool.weeklyUsed : tool.fiveUsed);
-      if (tool.limitsAt) usage.prepend(text('span', 'muted limits-at', tool, 'limitsAt'), el('span', '', ' · '));
       label.append(el('span', 'muted', weekly ? 'Weekly use' : '5-hour use'), usage);
       const track = el('div', 'track'), fill = el('div', weekly ? 'fill weekly-fill' : 'fill');
       fill.style.width = `${clamp((weekly ? tool.weeklyNum : tool.fiveUsedNum) / 100) * 100}%`;
       track.append(fill);
       group.append(label, track);
       if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
+      if (weekly && tool.limitsAt) group.append(text('span', 'weekly-reset', tool, 'limitsAt'));
       return group;
     }
 
