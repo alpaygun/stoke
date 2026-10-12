@@ -64,11 +64,11 @@
     .switch::after { width: 18px; height: 18px; background: #C9CED4; }
     .switch:checked { background: #F5A142; }
     .switch:checked::after { background: #1A1206; }
-    .dial-body { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; }
+    .dial-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 28px; }
     .dial { position: relative; width: 200px; height: 200px; flex: none; }
     .dial-center { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; text-align: center; }
     .remaining { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -.01em; }
-    .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+    .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
     .usage { display: flex; flex-direction: column; gap: 6px; }
     .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 13px; }
     .limits-at { font-size: 12px; }
@@ -90,8 +90,8 @@
     .refresh { min-height: 44px; padding: 4px 10px; white-space: nowrap; border: 1px solid #2C323A; border-radius: 8px; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
     .refresh:hover:not(:disabled) { border-color: #F5A142; color: #F5A142; }
     .refresh:disabled { color: #6B737C; }
-    .resets { display: flex; flex-direction: column; gap: 0; border-top: 1px solid #252A30; padding-top: 18px; }
-    .resets-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; cursor: pointer; list-style: none; min-height: 32px; padding: 4px 0; border-radius: 6px; }
+    .resets { position: relative; display: flex; flex-direction: column; gap: 0; }
+    .resets-head { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; cursor: pointer; list-style: none; border-radius: 6px; }
     .resets-head::-webkit-details-marker { display: none; }
     .resets-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
     .resets-head:hover .resets-title { color: #C3C9D0; }
@@ -99,8 +99,8 @@
     .resets-title { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
     .chevron { display: inline-block; width: 10px; color: #8A939D; font-family: var(--mono); transition: transform .15s; }
     .resets[open] .chevron { transform: rotate(90deg); }
-    .resets[open] .resets-head { margin-bottom: 10px; }
     .soon-text { color: #F5A142; }
+    .reset-pop { position: absolute; top: calc(100% + 10px); right: 0; z-index: 10; width: min(420px, calc(100vw - 48px)); padding: 14px; border: 1px solid #2C323A; border-radius: 12px; background: #15181C; box-shadow: 0 16px 40px rgba(0,0,0,.55); }
     .reset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
     .reset-item .mono { font-size: 13px; }
@@ -108,6 +108,9 @@
     .reset-item.soon .reset-when { color: #F5A142; }
     .reset-note { font-size: 12px; color: #8A939D; margin-top: 10px; }
 
+    @media (max-width: 931px) {
+      .reset-pop { position: static; width: auto; margin-top: 12px; padding: 0; border: 0; box-shadow: none; background: transparent; }
+    }
     @media (max-width: 480px) {
       .header-tools { justify-content: flex-start; }
       .card { padding: 20px; }
@@ -314,6 +317,7 @@
     function resetCredits(tool, current = now()) {
       const resets = tool.resets;
       const box = el('details', 'resets'), head = el('summary', 'resets-head'), count = el('div', 'resets-count');
+      box.setAttribute('data-tool', tool.name);
       box.open = expanded.has(tool.name);
       box.addEventListener('toggle', () => {
         if (box.isConnected) box.open ? expanded.add(tool.name) : expanded.delete(tool.name);
@@ -327,7 +331,7 @@
       if (first) head.append(el('span', `small ${soonFirst ? 'soon-text' : 'muted'}`,
         `next expires ${when(first.expires_at, current)} · in ${span(first.expires_at - current)}`));
       box.append(head);
-      const list = el('ul', 'reset-list');
+      const pop = el('div', 'reset-pop'), list = el('ul', 'reset-list');
       sorted.forEach(credit => {
         const left = credit.expires_at - current, soon = left < RESET_SOON_SECONDS;
         const item = el('li', `reset-item${soon ? ' soon' : ''}`);
@@ -335,8 +339,9 @@
           `expires ${when(credit.expires_at, current)} · in ${span(left)}`));
         list.append(item);
       });
-      if (sorted.length) box.append(list);
-      box.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
+      if (sorted.length) pop.append(list);
+      pop.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
+      box.append(pop);
       return box;
     }
     function toolTitle(tool) {
@@ -373,6 +378,22 @@
     // A later focus choice supersedes a control temporarily disabled by an action.
     document.addEventListener('focusin', event => {
       if (event.target.dataset?.key !== deferredFocus) deferredFocus = null;
+    });
+    function closeResets(box) {
+      box.open = false;
+      expanded.delete(box.dataset.tool);
+    }
+    document.addEventListener('click', event => {
+      app.querySelectorAll('details.resets[open]').forEach(box => {
+        if (!box.contains(event.target)) closeResets(box);
+      });
+    }, true);
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      app.querySelectorAll('details.resets[open]').forEach(box => {
+        closeResets(box);
+        box.querySelector('summary').focus({ preventScroll: true });
+      });
     });
     function showError(message) {
       error.textContent = message;
@@ -470,12 +491,12 @@
         const details = el('div', 'dial-details'), range = el('div', 'usage-label');
         range.append(el('span', 'muted', 'Window'), text('span', 'mono', tool, 'windowRange'));
         details.append(range, dialUsage(tool, false), dialUsage(tool, true));
+        if (tool.resets != null) details.append(resetCredits(tool));
         body.append(dial, details);
         const stats = el('dl', 'stats');
         stat(stats, 'Last stoke', tool, 'lastAt').append(text('dd', 'small muted', tool, 'lastMeta'), lastResult('dd', tool));
         stat(stats, 'Next stoke', tool, 'nextAt').append(text('dd', 'small muted', tool, 'nextMeta'));
         card.append(heading, body, stats);
-        if (tool.resets != null) card.append(resetCredits(tool));
         if (tool.refreshable) {
           const actions = el('div', 'actions');
           actions.append(refreshControl(tool), stokeControl(tool));
