@@ -76,9 +76,20 @@
     .weekly-reset { color: #8A939D; font-size: 12px; }
     .stats { gap: 16px; border-top: 1px solid #252A30; padding-top: 18px; }
     .card > .stats { margin-top: auto; }
-    .stat { gap: 4px; }
+    .stat { position: relative; gap: 4px; }
     dt { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
+    .stat-head { display: flex; align-items: center; gap: 6px; min-height: 16px; }
     .stat-value { font-family: var(--mono); font-size: 16px; }
+    .info { display: flex; }
+    .info > summary { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #2E343B; color: #6B737C; font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; text-transform: none; font-family: var(--mono); cursor: pointer; list-style: none; }
+    .info > summary::after { content: ""; position: absolute; inset: -9px; }
+    .info > summary::-webkit-details-marker { display: none; }
+    .info > summary:hover, .info > summary:focus, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
+    .info > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    .info-pop { top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 48px)); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; color: #E6E8EB; }
+    .info-row { display: flex; justify-content: space-between; gap: 12px; }
+    .info-row > :first-child { flex: none; }
+    .info-row > :last-child { min-width: 0; overflow-wrap: anywhere; text-align: right; }
     .last-result { font-size: 13px; }
     .failed { color: #FF8A7A; }
     .stoke { border: 1px solid #F5A142; border-radius: 10px; background: transparent; color: #F5A142; font-family: var(--mono); font-size: 14px; letter-spacing: .04em; }
@@ -86,11 +97,13 @@
     .stoke:disabled { color: #C98A42; border-color: #926B42; }
     .warning { display: flex; align-items: flex-start; gap: 10px; background: #3A1714; border: 1px solid #7A2A22; color: #FFD9D3; border-radius: 10px; padding: 12px 14px; }
     .warning svg { flex: none; margin-top: 1px; }
-    .actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+    .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .actions .stoke { grid-column: 1 / -1; }
     .refresh { min-height: 44px; padding: 4px 10px; white-space: nowrap; border: 1px solid #2C323A; border-radius: 8px; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
     .refresh:hover:not(:disabled) { border-color: #F5A142; color: #F5A142; }
     .refresh:disabled { color: #6B737C; }
     .resets { position: relative; display: flex; flex-direction: column; gap: 0; }
+    .resets-placeholder { visibility: hidden; }
     .resets-head { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; cursor: pointer; list-style: none; border-radius: 6px; }
     .resets-head::-webkit-details-marker { display: none; }
     .resets-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
@@ -100,7 +113,8 @@
     .chevron { display: inline-block; width: 10px; color: #8A939D; font-family: var(--mono); transition: transform .15s; }
     .resets[open] .chevron { transform: rotate(90deg); }
     .soon-text { color: #F5A142; }
-    .reset-pop { position: absolute; top: calc(100% + 10px); right: 0; z-index: 10; width: min(420px, calc(100vw - 48px)); padding: 14px; border: 1px solid #2C323A; border-radius: 12px; background: #15181C; box-shadow: 0 16px 40px rgba(0,0,0,.55); }
+    .popover-surface { position: absolute; z-index: 10; border: 1px solid #2C323A; border-radius: 12px; background: #15181C; box-shadow: 0 16px 40px rgba(0,0,0,.55); }
+    .reset-pop { top: calc(100% + 10px); right: 0; width: min(420px, calc(100vw - 48px)); padding: 14px; }
     .reset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
     .reset-item .mono { font-size: 13px; }
@@ -108,8 +122,6 @@
     .reset-item.soon .reset-when { color: #F5A142; }
     .reset-note { font-size: 12px; color: #8A939D; margin-top: 10px; }
     .plan-row { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
-    .plan-heading, .plan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-    .plan-heading { justify-content: space-between; }
     .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: #F5A142; font-size: 13px; }
     .text-button:hover:not(:disabled) { text-decoration: underline; }
     dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid #2C323A; border-radius: 16px; background: #15181C; color: #E6E8EB; }
@@ -123,17 +135,18 @@
     #plan-time { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); }
     #plan-message { white-space: pre-line; overflow-wrap: anywhere; }
     #plan-message.failed { color: var(--error-fg); }
-    .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }
+    .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
     .dialog-actions button { padding: 8px 16px; }
+    .dialog-actions .text-button { margin-right: auto; padding-left: 0; padding-right: 0; }
 
     @media (max-width: 931px) {
       .reset-pop { position: static; width: auto; margin-top: 12px; padding: 0; border: 0; box-shadow: none; background: transparent; }
+      .resets-placeholder { display: none; }
     }
     @media (max-width: 480px) {
       .header-tools { justify-content: flex-start; }
       .card { padding: 20px; }
       .dial-body { justify-content: center; }
-      .actions { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after, .chevron { transition: none; }
@@ -162,6 +175,7 @@
       <p id="plan-hint" class="small muted"></p>
       <p id="plan-message" class="small" role="status" hidden></p>
       <div class="dialog-actions">
+        <button id="plan-remove" type="button" class="text-button" hidden>Remove plan</button>
         <button id="plan-close" type="button" class="refresh">Close</button>
         <button id="plan-save" type="submit" class="stoke">Save</button>
       </div>
@@ -178,10 +192,12 @@
     const planTools = document.querySelector('#plan-tools');
     const planTime = document.querySelector('#plan-time');
     const planSave = document.querySelector('#plan-save');
+    const planRemove = document.querySelector('#plan-remove');
     const planMessage = document.querySelector('#plan-message');
     const busy = new Set();
     const inFlightActions = new Map();
     const expanded = new Set();
+    const resetsObserver = new ResizeObserver(syncResetPlaceholders);
     const RESET_SOON_SECONDS = 3 * 86400;
     const HOURS = 5 * 3600;
     const CIRCUMFERENCE = 2 * Math.PI * 86;
@@ -198,6 +214,7 @@
     let refreshId = 0;
     let deferredFocus = null;
     let planFocusKey = null;
+    let planTool = null;
     let planSaving = false;
     let displayTimezone = null;
     let zoneFormatter = null;
@@ -263,7 +280,7 @@
         else lastResult = 'Succeeded';
       }
       const warning = tool.warning ? WARN.get(tool.warning) : null;
-      const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '';
+      const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '—';
       const lastAgo = last ? `${span(current - last.at)} ago` : '';
       const nextAt = nextTs != null ? clock(nextTs) : 'off';
       const nextMeta = nextTs != null ? `${tool.upcoming_planned ? 'planned · ' : ''}in ${span(nextTs - current)}` : 'auto-stoke is off';
@@ -282,7 +299,7 @@
         weeklyNum: weekly?.used_percent ?? 0, weeklyUsed: weekly ? `${Math.round(weekly.used_percent)}%` : '—',
         weeklyReset: weekly ? `resets ${when(weekly.resets_at, current)}` : '—',
         lastTs: last?.at ?? null, lastAt: last ? clock(last.at) : '—',
-        lastMeta: last ? [last.trigger, lastDuration, lastAgo].filter(Boolean).join(' · ') : '—',
+        lastTrigger: last?.trigger ?? '—', lastDuration, lastAgo,
         lastOk: !!last?.ok, lastResult, nextAt, nextMeta,
         buttonText: tool.running ? 'Stoking…' : 'Stoke now',
         dialStatus: tool.running ? 'Stoking…' : open ? 'Window open' : 'Window closed',
@@ -367,25 +384,32 @@
       return button;
     }
     function refreshControl(tool) {
-      const button = el('button', 'refresh', tool.refreshing || inFlightActions.get(tool.name) === 'refresh' ? 'Reading…' : '↻ Refresh usage');
+      const button = el('button', 'refresh', refreshText(tool));
       button.setAttribute('type', 'button');
       button.setAttribute('data-key', `${tool.name}:refresh`);
       button.setAttribute('data-tool', tool.name);
       button.setAttribute('data-action', 'refresh');
       button.setAttribute('aria-label', `Read ${tool.label} usage now without stoking`);
-      button.setAttribute('title', 'Read usage and limit resets now. Sends no message and opens no window.');
-      button.disabled = tool.refreshing || tool.running || busy.has(tool.name);
+      button.setAttribute('title', tool.refreshable ? 'Read usage and limit resets now. Sends no message and opens no window.' : `${tool.label} usage can only be read by stoking.`);
+      button.disabled = !tool.refreshable || tool.refreshing || tool.running || busy.has(tool.name);
       button.addEventListener('click', () => act(tool.name, 'refresh'));
       return button;
     }
+    function refreshText(tool) {
+      return tool.refreshable && (tool.refreshing || inFlightActions.get(tool.name) === 'refresh') ? 'Reading…' : '↻ Refresh usage';
+    }
+    function popover(tool, kind, className) {
+      const box = el('details', `${className} popover`), key = `${tool.name}:${kind}`;
+      box.setAttribute('data-popover', key);
+      box.open = expanded.has(key);
+      box.addEventListener('toggle', () => {
+        if (box.isConnected) box.open ? expanded.add(key) : expanded.delete(key);
+      });
+      return box;
+    }
     function resetCredits(tool, current = now()) {
       const resets = tool.resets;
-      const box = el('details', 'resets'), head = el('summary', 'resets-head'), count = el('div', 'resets-count');
-      box.setAttribute('data-tool', tool.name);
-      box.open = expanded.has(tool.name);
-      box.addEventListener('toggle', () => {
-        if (box.isConnected) box.open ? expanded.add(tool.name) : expanded.delete(tool.name);
-      });
+      const box = popover(tool, 'resets', 'resets'), head = el('summary', 'resets-head'), count = el('div', 'resets-count');
       head.setAttribute('data-key', `${tool.name}:resets`);
       const sorted = [...resets.credits].sort((a, b) => a.expires_at - b.expires_at);
       const first = sorted[0], soonFirst = first && first.expires_at - current < RESET_SOON_SECONDS;
@@ -395,7 +419,7 @@
       if (first) head.append(el('span', `small ${soonFirst ? 'soon-text' : 'muted'}`,
         `next expires ${when(first.expires_at, current)} · in ${span(first.expires_at - current)}`));
       box.append(head);
-      const pop = el('div', 'reset-pop'), list = el('ul', 'reset-list');
+      const pop = el('div', 'popover-surface reset-pop'), list = el('ul', 'reset-list');
       sorted.forEach(credit => {
         const left = credit.expires_at - current, soon = left < RESET_SOON_SECONDS;
         const item = el('li', `reset-item${soon ? ' soon' : ''}`);
@@ -408,25 +432,37 @@
       box.append(pop);
       return box;
     }
-    function planControl(tool, label, action) {
-      const button = el('button', 'text-button', label);
+    function resetPlaceholder() {
+      const box = el('div', 'resets-placeholder');
+      box.setAttribute('aria-hidden', 'true');
+      box.setAttribute('inert', '');
+      return box;
+    }
+    function syncResetPlaceholders() {
+      // Match actual summary wrapping and font metrics without synthetic credits.
+      const summaries = Array.from(app.querySelectorAll('.resets-head'));
+      const height = Math.max(0, ...summaries.map(summary => summary.getBoundingClientRect().height));
+      app.querySelectorAll('.resets-placeholder').forEach(box => {
+        box.hidden = height === 0;
+        box.style.height = `${height}px`;
+      });
+    }
+    window.addEventListener('resize', syncResetPlaceholders);
+    function planButton(tool) {
+      const button = el('button', 'refresh', tool.plan ? '✎ Edit plan' : '+ Plan a stoke');
       button.setAttribute('type', 'button');
-      button.setAttribute('data-key', `${tool.name}:plan-${action}`);
+      button.setAttribute('data-key', `${tool.name}:plan-open`);
       button.setAttribute('data-tool', tool.name);
       button.disabled = busy.has(tool.name);
-      button.addEventListener('click', () => action === 'cancel' ? act(tool.name, 'plan/cancel') : openPlan(tool.name, button.dataset.key));
+      button.addEventListener('click', () => openPlan(tool.name, button.dataset.key));
       return button;
     }
     function planRow(tool, current = now()) {
       const row = el('div', 'plan-row'), plan = tool.plan;
-      if (!plan) row.append(planControl(tool, '+ Plan a stoke', 'add'));
-      else {
-        const heading = el('div', 'plan-heading'), actions = el('div', 'plan-actions');
+      if (plan) {
         let description = `Plan · ${plan.repeat === 'daily' ? `every day ${plan.time}` : `once, ${when(plan.target_at, current)}`}`;
         if (plan.auto_after != null) description += ` · then auto-stoke ${plan.auto_after ? 'on' : 'off'}`;
-        actions.append(planControl(tool, 'Edit', 'edit'), planControl(tool, 'Cancel', 'cancel'));
-        heading.append(el('span', '', description), actions);
-        row.append(heading, el('p', 'small muted', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
+        row.append(el('p', '', description), el('p', 'small muted', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
       }
       const outcome = tool.plan_outcome;
       if (outcome && ['missed', 'broken'].includes(outcome.result) && current - outcome.at >= 0 && current - outcome.at < 86400) {
@@ -437,6 +473,24 @@
     function updatePlanSave() {
       planSave.disabled = planSaving || !planTools.querySelector('input:checked');
     }
+    function syncPlanRemove() {
+      const tool = state?.tools[planTool];
+      planRemove.hidden = !tool?.plan || planSave.hidden;
+      planRemove.disabled = planSaving || busy.has(planTool);
+      planRemove.textContent = `Remove ${tool?.label ?? ''} plan`;
+    }
+    function setPlanSaving(saving) {
+      planSaving = saving;
+      planForm.querySelectorAll('input').forEach(input => { input.disabled = saving || planSave.hidden; });
+      document.querySelector('#plan-close').disabled = saving;
+      updatePlanSave();
+      syncPlanRemove();
+    }
+    function showPlanMessage(message, failed) {
+      planMessage.textContent = message;
+      planMessage.setAttribute('class', `small${failed ? ' failed' : ''}`);
+      planMessage.hidden = false;
+    }
     function updatePlanHint() {
       const value = planTime.value;
       const [hours, minutes] = value.split(':').map(Number);
@@ -444,7 +498,9 @@
       document.querySelector('#plan-hint').textContent = value ? `No auto-stoke from ${pad(Math.floor(from / 60))}:${pad(from % 60)} until ${value}. (${state?.timezone ?? 'Europe/Istanbul'})` : '';
     }
     function openPlan(name, focusKey) {
+      if (planSaving || busy.has(name)) return;
       const plan = state.tools[name].plan;
+      planTool = name;
       planFocusKey = focusKey;
       planSaving = false;
       planSave.hidden = false;
@@ -467,14 +523,27 @@
       });
       planForm.querySelectorAll('input').forEach(input => { input.disabled = false; });
       updatePlanSave();
+      syncPlanRemove();
       updatePlanHint();
       planDialog.showModal();
     }
     planTime.addEventListener('input', updatePlanHint);
     document.querySelector('#plan-close').addEventListener('click', () => planDialog.close());
-    planDialog.addEventListener('close', () => {
-      const exists = Array.from(app.querySelectorAll('[data-key]')).some(control => control.dataset.key === planFocusKey);
-      restoreFocus(exists ? planFocusKey : planFocusKey?.replace(':plan-add', ':plan-edit'));
+    planDialog.addEventListener('close', () => restoreFocus(planFocusKey));
+    planRemove.addEventListener('click', async () => {
+      if (planSaving || planRemove.disabled || !state?.tools[planTool]?.plan) return;
+      const name = planTool;
+      setPlanSaving(true);
+      try {
+        await post(name, 'plan/cancel');
+        await refresh();
+        planDialog.close();
+      } catch (failure) {
+        showPlanMessage(failure.message, true);
+      } finally {
+        setPlanSaving(false);
+        if (planDialog.open) (planRemove.hidden ? document.querySelector('#plan-close') : planRemove).focus();
+      }
     });
     planForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -484,11 +553,8 @@
       const after = planForm.querySelector('[name="auto_after"]:checked').value;
       const body = { time, repeat, auto_after: after === 'keep' ? null : after === 'on' };
       const messages = [], failures = [];
-      planSaving = true;
-      updatePlanSave();
+      setPlanSaving(true);
       planSave.textContent = 'Saving…';
-      planForm.querySelectorAll('input').forEach(input => { input.disabled = true; });
-      document.querySelector('#plan-close').disabled = true;
       for (const name of names) {
         try {
           const result = await post(name, 'plan', body);
@@ -496,16 +562,14 @@
         } catch (failure) { failures.push(`${state.tools[name].label}: ${failure.message}`); }
       }
       await refresh();
-      planSaving = false;
-      document.querySelector('#plan-close').disabled = false;
+      setPlanSaving(false);
       planSave.textContent = 'Save';
       if (messages.length || failures.length) {
-        planMessage.textContent = [...failures, ...messages].join('\n');
-        planMessage.setAttribute('class', `small${failures.length ? ' failed' : ''}`);
-        planMessage.hidden = false;
+        showPlanMessage([...failures, ...messages].join('\n'), failures.length > 0);
         planSave.hidden = messages.length > 0;
         planForm.querySelectorAll('input').forEach(input => { input.disabled = messages.length > 0; });
         updatePlanSave();
+        syncPlanRemove();
         (messages.length ? document.querySelector('#plan-close') : planSave).focus();
       } else planDialog.close();
     });
@@ -514,22 +578,40 @@
       title.append(el('h2', '', tool.label), text('span', `chip ${tool.running ? 'running' : tool.open ? '' : 'closed'}`, tool, 'dialStatus'));
       return title;
     }
+    function lastInfo(tool) {
+      const box = popover(tool, 'last', 'info'), head = el('summary', '', 'i');
+      head.setAttribute('data-key', `${tool.name}:last-info`);
+      head.setAttribute('aria-label', `Details of the last ${tool.label} stoke`);
+      const pop = el('div', 'popover-surface info-pop');
+      if (tool.lastTs == null) pop.append(el('span', 'muted', 'No stoke yet.'));
+      else {
+        [['Triggered', 'lastTrigger'], ['Took', 'lastDuration'], ['When', 'lastAgo'], ['Result', 'lastResult']].forEach(([label, field]) => {
+          const row = el('div', 'info-row');
+          row.append(el('span', 'muted', label), text('span', field === 'lastResult' && !tool.lastOk ? 'failed' : '', tool, field));
+          pop.append(row);
+        });
+      }
+      box.append(head, pop);
+      return box;
+    }
     function stat(list, title, tool, field) {
       const item = el('div', 'stat');
-      item.append(el('dt', '', title), text('dd', 'stat-value', tool, field));
+      const head = el('dt', 'stat-head', title);
+      if (field === 'lastAt') head.append(lastInfo(tool));
+      item.append(head, text('dd', 'stat-value', tool, field));
       list.append(item);
       return item;
     }
-    function lastResult(tag, tool) { return el(tag, `last-result${!tool.lastOk && tool.lastTs != null ? ' failed' : ''}`, tool.lastResult); }
     function syncControls() {
       const tools = new Map(Object.values(state?.tools ?? {}).map(tool => [tool.name, tool]));
       app.querySelectorAll('button[data-tool], input[data-tool]').forEach(control => {
         const tool = tools.get(control.dataset.tool);
         if (!tool) return;
-        control.disabled = busy.has(tool.name) || (control.dataset.action === 'refresh' ? tool.refreshing || tool.running : control.dataset.action === 'stoke' && tool.running);
-        if (control.dataset.action === 'refresh') control.textContent = tool.refreshing || inFlightActions.get(tool.name) === 'refresh' ? 'Reading…' : '↻ Refresh usage';
+        control.disabled = busy.has(tool.name) || (control.dataset.action === 'refresh' ? !tool.refreshable || tool.refreshing || tool.running : control.dataset.action === 'stoke' && tool.running);
+        if (control.dataset.action === 'refresh') control.textContent = refreshText(tool);
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
+      if (planDialog.open) syncPlanRemove();
       if (!planDialog.open) restoreFocus(deferredFocus);
     }
     function restoreFocus(key) {
@@ -544,21 +626,24 @@
     document.addEventListener('focusin', event => {
       if (event.target.dataset?.key !== deferredFocus) deferredFocus = null;
     });
-    function closeResets(box) {
+    function closePopover(box) {
       box.open = false;
-      expanded.delete(box.dataset.tool);
+      expanded.delete(box.dataset.popover);
     }
     document.addEventListener('click', event => {
-      app.querySelectorAll('details.resets[open]').forEach(box => {
-        if (!box.contains(event.target)) closeResets(box);
+      app.querySelectorAll('details.popover[open]').forEach(box => {
+        if (!box.contains(event.target)) closePopover(box);
       });
     }, true);
     document.addEventListener('keydown', event => {
       if (event.key !== 'Escape' || planDialog.open) return;
-      app.querySelectorAll('details.resets[open]').forEach(box => {
-        closeResets(box);
-        box.querySelector('summary').focus({ preventScroll: true });
-      });
+      const boxes = Array.from(app.querySelectorAll('details.popover[open]'));
+      const focused = boxes.find(box => box.contains(document.activeElement)) ?? boxes.at(-1);
+      boxes.forEach(closePopover);
+      if (focused) {
+        event.preventDefault();
+        focused.querySelector('summary').focus({ preventScroll: true });
+      }
     });
     function showError(message) {
       error.textContent = message;
@@ -581,7 +666,7 @@
       return response.json();
     }
     async function act(name, action, body) {
-      if (busy.has(name)) return;
+      if (busy.has(name) || (action === 'refresh' && !state?.tools[name]?.refreshable)) return;
       deferredFocus = document.activeElement?.dataset?.key ?? null;
       busy.add(name);
       inFlightActions.set(name, action);
@@ -628,8 +713,15 @@
     }
     function render() {
       const focusKey = planDialog.open ? null : document.activeElement?.dataset?.key ?? deferredFocus;
+      app.querySelectorAll('details.popover').forEach(box => {
+        box.open ? expanded.add(box.dataset.popover) : expanded.delete(box.dataset.popover);
+      });
       const vm = Object.values(state?.tools ?? {}).map(tool => view(tool));
       app.replaceChildren(renderDial(state, vm));
+      resetsObserver.disconnect();
+      app.querySelectorAll('.resets-head').forEach(head => resetsObserver.observe(head));
+      syncResetPlaceholders();
+      if (planDialog.open) syncPlanRemove();
       tick();
       restoreFocus(focusKey);
     }
@@ -670,17 +762,16 @@
         const details = el('div', 'dial-details'), range = el('div', 'usage-label');
         range.append(el('span', 'muted', 'Window'), text('span', 'mono', tool, 'windowRange'));
         details.append(range, dialUsage(tool, false), dialUsage(tool, true));
-        if (tool.resets != null) details.append(resetCredits(tool));
+        details.append(tool.resets != null ? resetCredits(tool) : resetPlaceholder());
         body.append(dial, details);
         const stats = el('dl', 'stats');
-        stat(stats, 'Last stoke', tool, 'lastAt').append(text('dd', 'small muted', tool, 'lastMeta'), lastResult('dd', tool));
+        const last = stat(stats, 'Last stoke', tool, 'lastAt');
+        if (!tool.lastOk && tool.lastTs != null) last.append(el('dd', 'last-result failed', tool.lastResult));
         stat(stats, 'Next stoke', tool, 'nextAt').append(text('dd', 'small muted', tool, 'nextMeta'));
         card.append(heading, body, planRow(tool), stats);
-        if (tool.refreshable) {
-          const actions = el('div', 'actions');
-          actions.append(refreshControl(tool), stokeControl(tool));
-          card.append(actions);
-        } else card.append(stokeControl(tool));
+        const actions = el('div', 'actions');
+        actions.append(stokeControl(tool), refreshControl(tool), planButton(tool));
+        card.append(actions);
         main.append(card);
       });
       wrap.append(main);
