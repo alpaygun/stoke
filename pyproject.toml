@@ -1,6 +1,6 @@
 [project]
 name = "stoke"
-version = "0.4.2"
+version = "0.5.0"
 description = "Keep official coding CLI usage windows running"
 requires-python = ">=3.12"
 
