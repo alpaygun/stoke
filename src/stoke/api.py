@@ -9,9 +9,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import clock
 from .config import Settings
-from .models import serialize_tool
+from .models import ToolState, serialize_tool
 from .providers.base import ProviderError
-from .scheduler import AlreadyRunning, RefreshUnsupported, Scheduler
+from .scheduler import AlreadyRunning, PlanConflict, RefreshUnsupported, Scheduler
 
 STATIC_PAGE = Path(__file__).resolve().parents[2] / "static" / "index.html"
 
@@ -38,22 +38,59 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         if name not in scheduler.states:
             raise HTTPException(404, "unknown tool")
 
+    def serialize(state: ToolState, now: int | None = None) -> dict[str, Any]:
+        return serialize_tool(
+            state, clock.now() if now is None else now,
+            refreshable=scheduler.can_refresh(state.name), settings=settings,
+        )
+
     @app.get("/api/state")
     async def get_state() -> dict[str, Any]:
         now = clock.now()
-        return {"dry_run": settings.dry_run, "server_time": now, "tools": {
-            name: serialize_tool(state, now, refreshable=scheduler.can_refresh(name))
+        return {"dry_run": settings.dry_run, "server_time": now, "timezone": settings.timezone.key, "tools": {
+            name: serialize(state, now)
             for name, state in scheduler.states.items()
         }}
 
     @app.post("/api/tools/{name}/stoke")
-    async def manual_stoke(name: str) -> dict[str, Any]:
+    async def manual_stoke(name: str, request: Request) -> Any:
         require_tool(name)
+        break_plan = False
+        if await request.body():
+            try:
+                body = await request.json()
+            except ValueError:
+                raise HTTPException(422, "body must contain break_plan: bool") from None
+            if not isinstance(body, dict) or set(body) - {"break_plan"} or type(body.get("break_plan", False)) is not bool:
+                raise HTTPException(422, "body must contain break_plan: bool")
+            break_plan = body.get("break_plan", False)
         try:
-            state = await scheduler.stoke_now(name, "manual")
+            state = await scheduler.stoke_now(name, "manual", break_plan=break_plan)
         except AlreadyRunning:
             raise HTTPException(409, "stoke already running") from None
-        return serialize_tool(state, clock.now(), refreshable=scheduler.can_refresh(name))
+        except PlanConflict as conflict:
+            return JSONResponse({
+                "detail": "stoke would break the plan", "code": "plan_conflict",
+                "plan_target_at": conflict.target_at,
+            }, status_code=409)
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/plan")
+    async def set_plan(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"time", "repeat", "auto_after"}:
+                raise ValueError("body must contain time, repeat and auto_after")
+            state, shifted = scheduler.set_plan(name, body["time"], body["repeat"], body["auto_after"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return {**serialize(state), "plan_shifted": shifted}
+
+    @app.post("/api/tools/{name}/plan/cancel")
+    async def cancel_plan(name: str) -> dict[str, Any]:
+        require_tool(name)
+        return serialize(scheduler.cancel_plan(name))
 
     @app.post("/api/tools/{name}/refresh")
     async def refresh_limits(name: str) -> dict[str, Any]:
@@ -66,7 +103,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             raise HTTPException(409, "already running") from None
         except ProviderError as error:
             raise HTTPException(502, str(error)) from None
-        return serialize_tool(state, clock.now(), refreshable=scheduler.can_refresh(name))
+        return serialize(state)
 
     @app.post("/api/tools/{name}/auto")
     async def set_auto(name: str, request: Request) -> dict[str, Any]:
@@ -78,7 +115,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
             raise HTTPException(422, "body must contain enabled: bool")
         state = scheduler.set_auto(name, body["enabled"])
-        return serialize_tool(state, clock.now(), refreshable=scheduler.can_refresh(name))
+        return serialize(state)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

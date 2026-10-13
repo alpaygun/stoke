@@ -15,6 +15,8 @@ Works with Claude Code and Codex CLI. Runs in Docker (built for a Raspberry Pi, 
 
 For Codex, usage and available limit resets are read with the official `codex app-server` (`account/rateLimits/read`) at startup, every `STOKE_REFRESH_SECONDS` (900 seconds by default), and on demand from the panel. This sends no message and never spends a reset.
 
+Plans let you start a tool's window at a chosen local time, once or every day, even with auto-stoke off. Automatic stokes pause in the five-hour quiet zone before that time so an earlier window does not overlap it. A plan can keep auto-stoke as it is or switch it on/off after a successful planned stoke (`auto_after`). Manual stoking in the quiet zone asks for confirmation before skipping that occurrence; daily plans continue the next day. Plan times use `STOKE_TIMEZONE` (default `Europe/Istanbul`).
+
 ## Quick start (dry run)
 
 Dry run is on by default and never executes either CLI.

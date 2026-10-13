@@ -3,17 +3,20 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from conftest import FakeProvider, FakeReader
 from stoke.config import Settings
-from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, Window
+from stoke.models import LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, Window
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
+from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
 
 
 def make_scheduler(settings: Settings, provider: FakeProvider) -> Scheduler:
@@ -699,6 +702,8 @@ def test_refresh_updates_only_usage_and_read_data_at_completion(
         state.stale_resets = 2
         state.auto_stoke = True
         state.limits_at = 900
+        state.plan = Plan("07:00", "daily", False, 30000, 30060)
+        state.plan_outcome = PlanOutcome(500, "missed", 600)
         before = deepcopy(state)
         caplog.clear()
         task = asyncio.create_task(scheduler.refresh_limits("codex"))
@@ -927,4 +932,384 @@ def test_stop_cancels_inflight_refresh_and_clears_live_flag(periodic: bool, sett
         assert scheduler.states["codex"].refreshing
         await scheduler.stop()
         assert task.cancelled() and not scheduler.states["codex"].refreshing and not scheduler._attempts
+    asyncio.run(scenario())
+
+
+def local_at(value: str, zone: str = "Europe/Istanbul") -> int:
+    """Resolve a fixture's local date and time without the host clock."""
+    return int(datetime.fromisoformat(value).replace(tzinfo=ZoneInfo(zone)).timestamp())
+
+
+@pytest.mark.parametrize("current,expected", [
+    ("2026-10-13T06:59:59", "2026-10-13T07:00"),
+    ("2026-10-13T07:00", "2026-10-14T07:00"),
+    ("2026-10-13T07:00:01", "2026-10-14T07:00"),
+])
+def test_first_target_strictly_after_now(current: str, expected: str) -> None:
+    assert first_target("07:00", local_at(current), ZoneInfo("Europe/Istanbul")) == local_at(expected)
+
+
+@pytest.mark.parametrize("date,next_date,hours", [
+    ("2026-03-07", "2026-03-08", 23), ("2026-10-31", "2026-11-01", 25),
+    ("2026-12-31", "2027-01-01", 24),
+])
+def test_following_target_uses_calendar_days(date: str, next_date: str, hours: int) -> None:
+    target = local_at(date + "T07:00", "America/New_York")
+    following = following_target(target, "07:00", ZoneInfo("America/New_York"))
+    assert following == local_at(next_date + "T07:00", "America/New_York")
+    assert following - target == hours * 3600
+    assert first_target("07:00", target, ZoneInfo("America/New_York")) == following
+
+
+@pytest.mark.parametrize("auto,base,retry,reset,expected,planned", [
+    (True, 1999, None, None, 1999, False),
+    (True, 2000, None, None, 20000, True),
+    (True, 2100, None, None, 20000, True),
+    (True, 20060, 20060, None, 20060, True),
+    (False, 1999, None, None, 20000, True),
+    (False, None, 20100, None, 20100, True),
+    (True, 21000, None, 21000, 21090, True),
+    (True, 21000, 20200, 21000, 20200, True),
+])
+def test_effective_next_plan_rules(
+    auto: bool, base: int | None, retry: int | None, reset: int | None, expected: int, planned: bool,
+    settings_factory: Callable[..., Settings],
+) -> None:
+    state = make_scheduler(settings_factory(), FakeProvider()).states["claude"]
+    state.auto_stoke, state.next_stoke_at = auto, base
+    state.plan = Plan("07:00", "daily", None, 20000, retry)
+    state.five_hour = None if reset is None else Window(1, reset, 300)
+    assert effective_next(state, settings_factory()) == (expected, planned)
+    assert state.next_stoke_at == base
+
+
+@pytest.mark.parametrize("auto,expected", [(True, (1000, False)), (False, (None, False))])
+def test_effective_next_without_plan(auto: bool, expected: tuple[int | None, bool], settings_factory: Callable[..., Settings]) -> None:
+    state = make_scheduler(settings_factory(), FakeProvider()).states["claude"]
+    state.auto_stoke, state.next_stoke_at = auto, 1000
+    assert effective_next(state, settings_factory()) == expected
+
+
+@pytest.mark.parametrize("now,expected", [(1999, False), (2000, True), (19999, True), (20000, False)])
+def test_quiet_zone_boundaries(now: int, expected: bool) -> None:
+    assert PLAN_QUIET_SECONDS == 18000
+    assert in_quiet_zone(Plan("07:00", "once", None, 20000, None), now) is expected
+
+
+def test_plan_deadline_ignores_retry() -> None:
+    plan = Plan("07:00", "daily", None, 20000, 25000)
+    assert PLAN_GRACE_SECONDS == 900
+    assert plan_due(plan, None, 90) == 25000
+    assert plan_deadline(plan, None, 90) == 20900
+    assert plan_deadline(plan, Window(1, 21000, 300), 90) == 21990
+    assert plan_deadline(plan, Window(1, 19000, 300), 90) == 20900
+
+
+@pytest.mark.parametrize("repeat", ["once", "daily"])
+@pytest.mark.parametrize("auto_after", [None, True, False])
+@pytest.mark.parametrize("trigger", ["planned", "manual"])
+@pytest.mark.parametrize("auto", [False, True])
+@pytest.mark.parametrize("offset", [0, 60])
+def test_planned_success_applies_auto_and_closes_occurrence(
+    repeat: str, auto_after: bool | None, trigger: str, auto: bool, offset: int,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    target = local_at("2026-10-13T07:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: target + offset)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeProvider(result=StokeResult(Window(1, target + 18000, 300), None, 12))
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1" if auto else "0"), provider)
+    state = scheduler.states["claude"]
+    state.plan = Plan("07:00", repeat, auto_after, target, target)
+    state.stale_resets = 2
+    asyncio.run(scheduler.stoke_now("claude", trigger))
+    assert state.plan_outcome == PlanOutcome(target, "done", target + offset)
+    expected_auto = auto if auto_after is None else auto_after
+    assert state.auto_stoke is expected_auto
+    assert state.next_stoke_at == (target + 18090 if expected_auto else None)
+    assert state.stale_resets == 0
+    assert state.last_stoke.ok and state.last_stoke.trigger == trigger
+    assert state.plan == (Plan("07:00", "daily", auto_after, local_at("2026-10-14T07:00"), None) if repeat == "daily" else None)
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    logs = [record.getMessage() for record in caplog.records if " plan " in record.getMessage()]
+    assert logs == ["tool=claude plan done target=2026-10-13T04:00:00+00:00"]
+
+
+@pytest.mark.parametrize("auto", [False, True])
+@pytest.mark.parametrize("repeat", ["once", "daily"])
+def test_planned_failure_retries_then_misses(
+    auto: bool, repeat: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = local_at("2026-10-13T07:00")
+    current = [target]
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1" if auto else "0"), FakeProvider(result=ProviderError("failed")))
+    state = scheduler.states["claude"]
+    state.plan = Plan("07:00", repeat, True, target, None)
+    for offset, retry in [(0, 60), (60, 360), (360, None)]:
+        current[0] = target + offset
+        asyncio.run(scheduler.stoke_now("claude", "planned"))
+        assert not state.last_stoke.ok and state.auto_stoke is auto
+        assert state.next_stoke_at == (next_after_failure(current[0], state.consecutive_failures, scheduler.settings) if auto else None)
+        if retry is None:
+            assert state.plan == (None if repeat == "once" else Plan("07:00", "daily", True, target + 86400, None))
+            assert state.plan_outcome == PlanOutcome(target, "missed", current[0])
+        else:
+            assert state.plan.retry_at == target + retry and state.plan_outcome is None
+            assert effective_next(state, scheduler.settings) == (target + retry, True)
+
+
+def test_retry_exactly_at_deadline_is_allowed_then_expires(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = local_at("2026-10-13T07:00")
+    current = [target]
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    scheduler = make_scheduler(settings_factory(STOKE_RETRY_SECONDS="900"), FakeProvider(result=ProviderError("failed")))
+    state = scheduler.states["claude"]
+    state.plan = Plan("07:00", "once", None, target, None)
+    asyncio.run(scheduler.stoke_now("claude", "planned"))
+    assert state.plan.retry_at == target + 900
+    current[0] += 900
+    assert not scheduler._expire_plan(state, current[0])
+    current[0] += 1
+    assert scheduler._expire_plan(state, current[0])
+    assert state.plan_outcome == PlanOutcome(target, "missed", current[0])
+
+
+@pytest.mark.parametrize("repeat", ["once", "daily"])
+def test_restart_expires_all_overdue_occurrences(
+    repeat: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target, current = local_at("2026-10-10T07:00"), local_at("2026-10-13T07:15:01")
+    monkeypatch.setattr("stoke.clock.now", lambda: current)
+    async def scenario() -> None:
+        scheduler = make_scheduler(settings_factory(), FakeProvider())
+        state = scheduler.states["claude"]
+        state.plan = Plan("07:00", repeat, True, target, None)
+        save(scheduler.path, scheduler.states)
+        scheduler.states = load(scheduler.path, scheduler.settings, scheduler.providers)
+        state = scheduler.states["claude"]
+        await scheduler.start()
+        try:
+            await asyncio.sleep(0)
+            assert state.plan_outcome == PlanOutcome(target if repeat == "once" else local_at("2026-10-13T07:00"), "missed", current)
+            assert state.plan == (None if repeat == "once" else Plan("07:00", "daily", True, local_at("2026-10-14T07:00"), None))
+            assert not state.auto_stoke and scheduler.providers["claude"].calls == 0
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("repeat", ["once", "daily"])
+def test_manual_quiet_conflict_and_explicit_break(
+    repeat: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target, current = local_at("2026-10-13T07:00"), local_at("2026-10-13T03:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: current)
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(1, current + 18000, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(), provider)
+        state = scheduler.states["claude"]
+        state.plan = Plan("07:00", repeat, True, target, None)
+        before = deepcopy(state)
+        with pytest.raises(PlanConflict) as error:
+            await scheduler.stoke_now("claude", "manual")
+        assert error.value.target_at == target
+        assert state == before and provider.calls == 0
+        assert not scheduler._attempts and not scheduler.locks["claude"].locked()
+        await scheduler.stoke_now("claude", "manual", break_plan=True)
+        assert state.plan_outcome == PlanOutcome(target, "broken", current)
+        assert not state.auto_stoke and state.next_stoke_at is None
+        assert state.plan == (None if repeat == "once" else Plan("07:00", "daily", True, local_at("2026-10-14T07:00"), None))
+        assert provider.calls == 1 and state.last_stoke.trigger == "manual"
+    asyncio.run(scenario())
+
+
+def test_manual_before_quiet_leaves_plan_and_auto_success_is_held(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = local_at("2026-10-13T01:59")
+    monkeypatch.setattr("stoke.clock.now", lambda: current)
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_DELAY_SECONDS="0"), FakeProvider(result=StokeResult(Window(1, current + 18000, 300), None, 12)))
+    state, shifted = scheduler.set_plan("claude", "07:00", "daily", False)
+    before = deepcopy(state.plan)
+    assert not shifted
+    asyncio.run(scheduler.stoke_now("claude", "manual", break_plan=True))
+    assert state.plan == before and state.plan_outcome is None
+    asyncio.run(scheduler.stoke_now("claude", "auto"))
+    assert state.plan == before and state.next_stoke_at == current + 18000
+    assert effective_next(state, scheduler.settings) == (local_at("2026-10-13T07:00"), True)
+
+
+@pytest.mark.parametrize("auto", [True, False])
+@pytest.mark.parametrize("enable", [False, True])
+def test_startup_in_quiet_zone_and_auto_off_plan_wait_for_target(
+    auto: bool, enable: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = [local_at("2026-10-13T03:00")]
+    target = local_at("2026-10-13T07:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(1, target + 18000, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1" if auto else "0"), provider)
+        state = scheduler.states["claude"]
+        state.five_hour = Window(1, current[0] - 1, 300)
+        scheduler.set_plan("claude", "07:00", "once", False)
+        timers: asyncio.Queue[float] = asyncio.Queue()
+        original_wait_for = asyncio.wait_for
+        async def observe(awaitable: Awaitable[bool], timeout: float) -> bool:
+            timers.put_nowait(timeout)
+            return await original_wait_for(awaitable, timeout)
+        monkeypatch.setattr("stoke.scheduler.asyncio.wait_for", observe)
+        await scheduler.start()
+        try:
+            assert await original_wait_for(timers.get(), 0.5) == target - current[0]
+            assert provider.calls == 0
+            assert state.next_stoke_at == (current[0] if auto else None)
+            if enable:
+                scheduler.set_auto("claude", True)
+                assert await original_wait_for(timers.get(), 0.5) == target - current[0]
+                assert provider.calls == 0
+            current[0] = target
+            scheduler.events["claude"].set()
+            await original_wait_for(provider.started.wait(), 0.5)
+            assert provider.calls == 1 and state.last_stoke.trigger == "planned"
+            assert state.plan is None and state.plan_outcome.result == "done"
+            assert not state.auto_stoke and state.next_stoke_at is None
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reset,shifted", [(None, False), (0, False), (1, True)])
+def test_set_plan_shift_replace_persist_and_cancel(
+    reset: int | None, shifted: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current, target = local_at("2026-10-13T03:00"), local_at("2026-10-13T07:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: current)
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), FakeProvider())
+    state = scheduler.states["claude"]
+    state.next_stoke_at = current
+    state.five_hour = None if reset is None else Window(1, target + reset, 300)
+    state.plan = Plan("08:00", "once", None, target + 3600, 123)
+    state.plan_outcome = PlanOutcome(1000, "broken", 1001)
+    outcome = deepcopy(state.plan_outcome)
+    result, actual_shift = scheduler.set_plan("claude", "07:00", "daily", True)
+    assert result is state and actual_shift is shifted
+    assert state.plan == Plan("07:00", "daily", True, target + (86400 if shifted else 0), None)
+    assert state.plan_outcome == outcome and state.next_stoke_at == current
+    assert scheduler.events["claude"].is_set()
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+    scheduler.set_auto("claude", False)
+    assert state.plan is not None
+    scheduler.set_auto("claude", True)
+    base = state.next_stoke_at
+    scheduler.events["claude"].clear()
+    assert scheduler.cancel_plan("claude") is state
+    assert effective_next(state, scheduler.settings) == (base, False)
+    assert state.plan_outcome == outcome and scheduler.events["claude"].is_set()
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+
+
+@pytest.mark.parametrize("time,repeat,auto_after", [
+    ("7:00", "daily", None), ("24:00", "daily", None), ("07:60", "daily", None),
+    ("07:00:00", "daily", None), ("07:00\n", "daily", None), (None, "daily", None),
+    ("07:00", "weekly", None), ("07:00", [], None), ("07:00", "daily", 1),
+    ("07:00", "daily", "true"),
+])
+def test_set_plan_rejects_bad_values(
+    time: object, repeat: object, auto_after: object, settings_factory: Callable[..., Settings],
+) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeProvider())
+    with pytest.raises(ValueError):
+        scheduler.set_plan("claude", time, repeat, auto_after)
+    assert scheduler.states["claude"].plan is None
+
+
+def test_daily_loop_keeps_early_auto_stoke_then_waits_for_plan(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = [local_at("2026-10-13T01:59")]
+    target = local_at("2026-10-13T07:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(1, current[0] + 18000, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_DELAY_SECONDS="0"), provider)
+        state, _ = scheduler.set_plan("claude", "07:00", "daily", None)
+        timers: asyncio.Queue[float] = asyncio.Queue()
+        original_wait_for = asyncio.wait_for
+        async def observe(awaitable: Awaitable[bool], timeout: float) -> bool:
+            timers.put_nowait(timeout)
+            return await original_wait_for(awaitable, timeout)
+        monkeypatch.setattr("stoke.scheduler.asyncio.wait_for", observe)
+        await scheduler.start()
+        try:
+            assert await original_wait_for(timers.get(), 0.5) == target - current[0]
+            assert provider.calls == 1 and state.last_stoke.trigger == "startup"
+            assert state.plan_outcome is None
+            current[0] = target
+            provider.result = StokeResult(Window(1, target + 18000, 300), None, 12)
+            scheduler.events["claude"].set()
+            assert await original_wait_for(timers.get(), 0.5) == 18000
+            assert provider.calls == 2 and state.last_stoke.trigger == "planned"
+            assert state.plan_outcome == PlanOutcome(target, "done", target)
+            assert state.plan.target_at == target + 86400
+            assert effective_next(state, scheduler.settings) == (target + 18000, False)
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
+def test_cancel_plan_wakes_held_auto_loop(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = local_at("2026-10-13T03:00")
+    monkeypatch.setattr("stoke.clock.now", lambda: current)
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(1, current + 18000, 300), None, 12))
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        scheduler.set_plan("claude", "07:00", "once", None)
+        await scheduler.start()
+        try:
+            await asyncio.sleep(0)
+            assert provider.calls == 0
+            scheduler.cancel_plan("claude")
+            await asyncio.wait_for(provider.started.wait(), 0.5)
+            assert provider.calls == 1 and scheduler.states["claude"].last_stoke.trigger == "startup"
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["replace", "cancel", "none"])
+def test_inflight_attempt_does_not_close_a_replacement_plan(
+    change: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = local_at("2026-10-13T07:00")
+    current = [target]
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    async def scenario() -> None:
+        provider = FakeProvider(result=StokeResult(Window(1, target + 18000, 300), None, 12))
+        provider.release = asyncio.Event()
+        scheduler = make_scheduler(settings_factory(), provider)
+        state = scheduler.states["claude"]
+        state.plan = Plan("07:00", "once", True, target, None)
+        task = asyncio.create_task(scheduler.stoke_now("claude", "manual"))
+        await provider.started.wait()
+        current[0] += 901
+        assert not scheduler._expire_plan(state, current[0])
+        if change == "replace":
+            scheduler.set_plan("claude", "08:00", "daily", False)
+        elif change == "cancel":
+            scheduler.cancel_plan("claude")
+        pending = deepcopy(state.plan)
+        provider.release.set()
+        await task
+        if change == "none":
+            assert state.plan is None and state.plan_outcome == PlanOutcome(target, "done", current[0])
+            assert state.auto_stoke
+        else:
+            assert state.plan == pending and state.plan_outcome is None and not state.auto_stoke
     asyncio.run(scenario())

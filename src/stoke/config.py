@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class Settings:
     dry_run_window_seconds: int
     dry_run_fail: tuple[str, ...]
     codex_home: Path
+    timezone: ZoneInfo
     process_env: Mapping[str, str] = field(repr=False, compare=False)
 
 
@@ -85,6 +87,10 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
     port = _integer(env.get("STOKE_PORT", "8787"), "STOKE_PORT")
     if port > 65535:
         raise ValueError("STOKE_PORT must be at most 65535")
+    try:
+        timezone = ZoneInfo(env.get("STOKE_TIMEZONE", "Europe/Istanbul"))
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError("STOKE_TIMEZONE must be a valid IANA time zone") from None
     return Settings(
         dry_run=env.get("STOKE_DRY_RUN", "1") not in {"0", "false", "no"},
         tools=_names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS"),
@@ -101,5 +107,6 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         ),
         dry_run_fail=_names(env.get("STOKE_DRY_RUN_FAIL", ""), "STOKE_DRY_RUN_FAIL", True),
         codex_home=_path(env.get("CODEX_HOME", "/home/stoke/.codex"), "CODEX_HOME"),
+        timezone=timezone,
         process_env=MappingProxyType(dict(env)),
     )

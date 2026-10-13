@@ -22,6 +22,7 @@ def test_defaults_and_frozen_environment_snapshot() -> None:
     assert settings.host == "0.0.0.0" and settings.port == 8787
     assert settings.dry_run_window_seconds == 18000 and settings.dry_run_fail == ()
     assert settings.codex_home == Path("/home/stoke/.codex")
+    assert settings.timezone.key == "Europe/Istanbul"
     assert "synthetic-secret" not in repr(settings)
     source["CLAUDE_CODE_OAUTH_TOKEN"] = "changed"
     assert settings.process_env["CLAUDE_CODE_OAUTH_TOKEN"] == "synthetic-secret"
@@ -73,3 +74,13 @@ def test_overrides_and_display_order() -> None:
 @pytest.mark.parametrize("seconds", [60, 900, 1800])
 def test_refresh_interval_minimum_and_override(seconds: int) -> None:
     assert load_settings({"STOKE_REFRESH_SECONDS": str(seconds)}).refresh_seconds == seconds
+
+
+@pytest.mark.parametrize("key", ["Unknown/Zone", "", "../Europe/Istanbul", "/Europe/Istanbul"])
+def test_invalid_timezone(key: str) -> None:
+    with pytest.raises(ValueError, match="^STOKE_TIMEZONE must be a valid IANA time zone$"):
+        load_settings({"STOKE_TIMEZONE": key})
+
+
+def test_timezone_override() -> None:
+    assert load_settings({"STOKE_TIMEZONE": "America/New_York"}).timezone.key == "America/New_York"
