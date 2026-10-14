@@ -19,6 +19,7 @@ CLAUDE.local.md
 AGENTS.md
 CONTEXT.md
 CHANGELOG.md
+.claude/
 
 # stray pytest temp dirs from sandboxed runs
 pytest-cache-files-*/
