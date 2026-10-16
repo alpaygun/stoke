@@ -84,7 +84,7 @@
     .info > summary { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #2E343B; color: #6B737C; font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; text-transform: none; font-family: var(--mono); cursor: pointer; list-style: none; }
     .info > summary::after { content: ""; position: absolute; inset: -9px; }
     .info > summary::-webkit-details-marker { display: none; }
-    .info > summary:hover, .info > summary:focus, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
+    .info > summary:hover, .info > summary:focus-visible, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
     .info > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
     .info-pop { top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 48px)); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; color: #E6E8EB; }
     .info-row { display: flex; justify-content: space-between; gap: 12px; }
@@ -133,7 +133,7 @@
     .plan-form label { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
     .plan-form input { accent-color: #F5A142; }
     #plan-time { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); }
-    #plan-message { white-space: pre-line; overflow-wrap: anywhere; }
+    #plan-message, #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
     #plan-message.failed { color: var(--error-fg); }
     .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
     .dialog-actions button { padding: 8px 16px; }
@@ -173,6 +173,7 @@
         <label><input type="radio" name="auto_after" value="off"> Turn auto-stoke off</label>
       </fieldset>
       <p id="plan-hint" class="small muted"></p>
+      <p id="plan-block" class="small failed" role="status" hidden></p>
       <p id="plan-message" class="small" role="status" hidden></p>
       <div class="dialog-actions">
         <button id="plan-remove" type="button" class="text-button" hidden>Remove plan</button>
@@ -194,6 +195,7 @@
     const planSave = document.querySelector('#plan-save');
     const planRemove = document.querySelector('#plan-remove');
     const planMessage = document.querySelector('#plan-message');
+    const planBlock = document.querySelector('#plan-block');
     const busy = new Set();
     const inFlightActions = new Map();
     const expanded = new Set();
@@ -471,7 +473,22 @@
       return row;
     }
     function updatePlanSave() {
-      planSave.disabled = planSaving || !planTools.querySelector('input:checked');
+      const lines = [], value = planTime.value, current = now();
+      if (value) {
+        const [hours, minutes] = value.split(':').map(Number), date = localDate(current);
+        const t = hours * 3600 + minutes * 60;
+        const n = date.hour * 3600 + date.minute * 60 + Math.floor(current) % 60;
+        let d = (t - n + 86400) % 86400;
+        if (d === 0) d = 86400;
+        planTools.querySelectorAll('input:checked').forEach(input => {
+          const tool = state.tools[input.value], end = tool.five_hour?.resets_at;
+          if (end == null || end <= current) return;
+          if (end - current > d) lines.push(`${tool.label}: its window is open until ${clock(end)}, so ${clock(current + d)} can't be reached. Pick a time after ${clock(end)}.`);
+        });
+      }
+      if (planBlock.textContent !== lines.join('\n')) planBlock.textContent = lines.join('\n');
+      planBlock.hidden = lines.length === 0;
+      planSave.disabled = planSaving || lines.length > 0 || !planTools.querySelector('input:checked');
     }
     function syncPlanRemove() {
       const tool = state?.tools[planTool];
@@ -496,6 +513,7 @@
       const [hours, minutes] = value.split(':').map(Number);
       const from = (hours * 60 + minutes - 300 + 1440) % 1440;
       document.querySelector('#plan-hint').textContent = value ? `No auto-stoke from ${pad(Math.floor(from / 60))}:${pad(from % 60)} until ${value}. (${state?.timezone ?? 'Europe/Istanbul'})` : '';
+      updatePlanSave();
     }
     function openPlan(name, focusKey) {
       if (planSaving || busy.has(name)) return;
@@ -552,25 +570,20 @@
       const time = planTime.value, repeat = planForm.querySelector('[name="repeat"]:checked').value;
       const after = planForm.querySelector('[name="auto_after"]:checked').value;
       const body = { time, repeat, auto_after: after === 'keep' ? null : after === 'on' };
-      const messages = [], failures = [];
+      const failures = [];
       setPlanSaving(true);
       planSave.textContent = 'Saving…';
       for (const name of names) {
         try {
-          const result = await post(name, 'plan', body);
-          if (result.plan_shifted) messages.push(`${result.label}: its window is still open at ${time}, so the first planned stoke is ${when(result.plan.target_at)}.`);
+          await post(name, 'plan', body);
         } catch (failure) { failures.push(`${state.tools[name].label}: ${failure.message}`); }
       }
       await refresh();
       setPlanSaving(false);
       planSave.textContent = 'Save';
-      if (messages.length || failures.length) {
-        showPlanMessage([...failures, ...messages].join('\n'), failures.length > 0);
-        planSave.hidden = messages.length > 0;
-        planForm.querySelectorAll('input').forEach(input => { input.disabled = messages.length > 0; });
-        updatePlanSave();
-        syncPlanRemove();
-        (messages.length ? document.querySelector('#plan-close') : planSave).focus();
+      if (failures.length) {
+        showPlanMessage(failures.join('\n'), true);
+        planSave.focus();
       } else planDialog.close();
     });
     function toolTitle(tool) {
@@ -611,7 +624,7 @@
         if (control.dataset.action === 'refresh') control.textContent = refreshText(tool);
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
-      if (planDialog.open) syncPlanRemove();
+      if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
       if (!planDialog.open) restoreFocus(deferredFocus);
     }
     function restoreFocus(key) {
@@ -721,7 +734,7 @@
       resetsObserver.disconnect();
       app.querySelectorAll('.resets-head').forEach(head => resetsObserver.observe(head));
       syncResetPlaceholders();
-      if (planDialog.open) syncPlanRemove();
+      if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
       tick();
       restoreFocus(focusKey);
     }

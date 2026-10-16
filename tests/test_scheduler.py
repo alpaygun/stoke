@@ -16,7 +16,7 @@ from stoke.models import LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCr
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
-from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
+from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, PlanUnreachable, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
 
 
 def make_scheduler(settings: Settings, provider: FakeProvider) -> Scheduler:
@@ -1133,9 +1133,8 @@ def test_manual_before_quiet_leaves_plan_and_auto_success_is_held(
     current = local_at("2026-10-13T01:59")
     monkeypatch.setattr("stoke.clock.now", lambda: current)
     scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_DELAY_SECONDS="0"), FakeProvider(result=StokeResult(Window(1, current + 18000, 300), None, 12)))
-    state, shifted = scheduler.set_plan("claude", "07:00", "daily", False)
+    state = scheduler.set_plan("claude", "07:00", "daily", False)
     before = deepcopy(state.plan)
-    assert not shifted
     asyncio.run(scheduler.stoke_now("claude", "manual", break_plan=True))
     assert state.plan == before and state.plan_outcome is None
     asyncio.run(scheduler.stoke_now("claude", "auto"))
@@ -1183,9 +1182,9 @@ def test_startup_in_quiet_zone_and_auto_off_plan_wait_for_target(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("reset,shifted", [(None, False), (0, False), (1, True)])
-def test_set_plan_shift_replace_persist_and_cancel(
-    reset: int | None, shifted: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("reset,rejected", [(None, False), (0, False), (1, True)])
+def test_set_plan_accept_reject_replace_persist_and_cancel(
+    reset: int | None, rejected: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current, target = local_at("2026-10-13T03:00"), local_at("2026-10-13T07:00")
     monkeypatch.setattr("stoke.clock.now", lambda: current)
@@ -1195,10 +1194,24 @@ def test_set_plan_shift_replace_persist_and_cancel(
     state.five_hour = None if reset is None else Window(1, target + reset, 300)
     state.plan = Plan("08:00", "once", None, target + 3600, 123)
     state.plan_outcome = PlanOutcome(1000, "broken", 1001)
+    save(scheduler.path, scheduler.states)
+    before = deepcopy(state)
+    persisted = scheduler.path.read_bytes()
+    scheduler.events["claude"].clear()
     outcome = deepcopy(state.plan_outcome)
-    result, actual_shift = scheduler.set_plan("claude", "07:00", "daily", True)
-    assert result is state and actual_shift is shifted
-    assert state.plan == Plan("07:00", "daily", True, target + (86400 if shifted else 0), None)
+    if rejected:
+        def forbid_persist() -> None:
+            pytest.fail("Rejected plans must not persist state")
+        monkeypatch.setattr(scheduler, "_persist", forbid_persist)
+        with pytest.raises(PlanUnreachable, match="^window open until 07:00, so 07:00 cannot be reached$"):
+            scheduler.set_plan("claude", "07:00", "daily", True)
+        assert state == before
+        assert scheduler.path.read_bytes() == persisted
+        assert not scheduler.events["claude"].is_set()
+        return
+    result = scheduler.set_plan("claude", "07:00", "daily", True)
+    assert result is state
+    assert state.plan == Plan("07:00", "daily", True, target, None)
     assert state.plan_outcome == outcome and state.next_stoke_at == current
     assert scheduler.events["claude"].is_set()
     assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
@@ -1237,7 +1250,7 @@ def test_daily_loop_keeps_early_auto_stoke_then_waits_for_plan(
     async def scenario() -> None:
         provider = FakeProvider(result=StokeResult(Window(1, current[0] + 18000, 300), None, 12))
         scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_DELAY_SECONDS="0"), provider)
-        state, _ = scheduler.set_plan("claude", "07:00", "daily", None)
+        state = scheduler.set_plan("claude", "07:00", "daily", None)
         timers: asyncio.Queue[float] = asyncio.Queue()
         original_wait_for = asyncio.wait_for
         async def observe(awaitable: Awaitable[bool], timeout: float) -> bool:

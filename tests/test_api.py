@@ -229,13 +229,12 @@ def test_plan_set_state_and_cancel(
         assert response.status_code == 200
         tool = response.json()
         assert tool["plan"] == {"time": "07:00", "repeat": repeat, "auto_after": auto_after, "target_at": 18000, "retry_at": None}
-        assert tool["plan_shifted"] is False
         assert tool["upcoming_at"] == 18000 and tool["upcoming_planned"] is True
         assert tool["quiet_from"] == 0 and tool["next_stoke_at"] is None
         assert load(scheduler.path, settings, scheduler.providers)["claude"].plan == scheduler.states["claude"].plan
         state = client.get("/api/state").json()
         assert state["timezone"] == settings.timezone.key
-        assert state["tools"]["claude"] == {key: value for key, value in tool.items() if key != "plan_shifted"}
+        assert state["tools"]["claude"] == tool
         cancelled = client.post("/api/tools/claude/plan/cancel", headers=HEADERS)
         assert cancelled.status_code == 200
         assert cancelled.json()["plan"] is None and cancelled.json()["quiet_from"] is None
@@ -267,15 +266,18 @@ def test_plan_strict_body_validation(body: object, settings_factory: Callable[..
         assert scheduler.states["claude"].plan is None
 
 
-def test_plan_shifted_response(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_unreachable_response(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("stoke.clock.now", lambda: 1000)
     settings = settings_factory()
     scheduler = make_scheduler(settings)
-    scheduler.states["claude"].five_hour = Window(1, 18001, 300)
+    previous = scheduler.set_plan("claude", "08:00", "daily", None).plan
+    scheduler.states["claude"].five_hour = Window(1, 19500, 300)
     with TestClient(create_app(scheduler, settings)) as client:
         response = client.post("/api/tools/claude/plan", headers=HEADERS, json={"time": "07:00", "repeat": "once", "auto_after": True})
-        assert response.status_code == 200 and response.json()["plan_shifted"]
-        assert response.json()["plan"]["target_at"] == 104400
+        assert response.status_code == 422
+        assert response.json() == {"detail": "window open until 07:25, so 07:00 cannot be reached"}
+        assert scheduler.states["claude"].plan == previous
+        assert client.get("/api/state").json()["tools"]["claude"]["plan"]["time"] == "08:00"
 
 
 def test_stoke_plan_conflict_body_and_break(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
