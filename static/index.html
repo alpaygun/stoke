@@ -84,7 +84,7 @@
     .info > summary { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #2E343B; color: #6B737C; font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; text-transform: none; font-family: var(--mono); cursor: pointer; list-style: none; }
     .info > summary::after { content: ""; position: absolute; inset: -9px; }
     .info > summary::-webkit-details-marker { display: none; }
-    .info > summary:hover, .info > summary:focus, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
+    .info > summary:hover, .info > summary:focus-visible, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
     .info > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
     .info-pop { top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 48px)); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; color: #E6E8EB; }
     .info-row { display: flex; justify-content: space-between; gap: 12px; }
