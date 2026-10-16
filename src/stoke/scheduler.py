@@ -33,6 +33,10 @@ class PlanConflict(Exception):
         self.target_at = target_at
 
 
+class PlanUnreachable(ValueError):
+    """A known window stays open beyond the first plan target."""
+
+
 class RefreshUnsupported(Exception):
     """A tool has no official no-stoke limit reader."""
 
@@ -278,18 +282,18 @@ class Scheduler:
 
     def set_plan(
         self, name: str, time: str, repeat: PlanRepeat, auto_after: bool | None,
-    ) -> tuple[ToolState, bool]:
-        """Replace a plan, shifting an unreachable first target by one day."""
+    ) -> ToolState:
+        """Replace a plan, rejecting an unreachable first target without changes."""
         validate_plan(time, repeat, auto_after)
         state = self.states[name]
         target = first_target(time, clock.now(), self.settings.timezone)
-        shifted = state.five_hour is not None and state.five_hour.resets_at > target
-        if shifted:
-            target = following_target(target, time, self.settings.timezone)
+        if state.five_hour is not None and state.five_hour.resets_at > target:
+            end = datetime.fromtimestamp(state.five_hour.resets_at, self.settings.timezone).strftime("%H:%M")
+            raise PlanUnreachable(f"window open until {end}, so {time} cannot be reached")
         state.plan = Plan(time, repeat, auto_after, target, None)
         self._persist()
         self.events[name].set()
-        return state, shifted
+        return state
 
     def cancel_plan(self, name: str) -> ToolState:
         """Remove the plan and wake the ordinary automatic schedule."""

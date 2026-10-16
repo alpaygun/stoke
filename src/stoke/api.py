@@ -82,10 +82,10 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             body = await request.json()
             if not isinstance(body, dict) or set(body) != {"time", "repeat", "auto_after"}:
                 raise ValueError("body must contain time, repeat and auto_after")
-            state, shifted = scheduler.set_plan(name, body["time"], body["repeat"], body["auto_after"])
+            state = scheduler.set_plan(name, body["time"], body["repeat"], body["auto_after"])
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
-        return {**serialize(state), "plan_shifted": shifted}
+        return serialize(state)
 
     @app.post("/api/tools/{name}/plan/cancel")
     async def cancel_plan(name: str) -> dict[str, Any]:
