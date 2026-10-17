@@ -163,8 +163,8 @@
       <label for="plan-time">Local time <input id="plan-time" type="time" value="07:00" required></label>
       <fieldset>
         <legend>Repeat</legend>
-        <label><input type="radio" name="repeat" value="once"> Once</label>
-        <label><input type="radio" name="repeat" value="daily" checked> Every day</label>
+        <label><input type="radio" name="repeat" value="once" checked> Once</label>
+        <label><input type="radio" name="repeat" value="daily"> Every day</label>
       </fieldset>
       <fieldset>
         <legend>After the planned stoke</legend>
@@ -526,7 +526,7 @@
       planMessage.hidden = true;
       planMessage.textContent = '';
       planTime.value = plan?.time ?? '07:00';
-      planForm.querySelectorAll('[name="repeat"]').forEach(input => { input.checked = input.value === (plan?.repeat ?? 'daily'); });
+      planForm.querySelectorAll('[name="repeat"]').forEach(input => { input.checked = input.value === (plan?.repeat ?? 'once'); });
       const after = plan?.auto_after == null ? 'keep' : plan.auto_after ? 'on' : 'off';
       planForm.querySelectorAll('[name="auto_after"]').forEach(input => { input.checked = input.value === after; });
       planTools.replaceChildren();
