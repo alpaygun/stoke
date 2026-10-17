@@ -2,7 +2,9 @@
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -19,7 +21,6 @@ class Settings:
     delay_seconds: int
     retry_seconds: tuple[int, ...]
     timeout_seconds: float
-    refresh_seconds: int
     data_dir: Path
     host: str
     port: int
@@ -27,6 +28,8 @@ class Settings:
     dry_run_fail: tuple[str, ...]
     codex_home: Path
     timezone: ZoneInfo
+    claude_reader_dir: Path
+    claude_token_expires: int | None
     process_env: Mapping[str, str] = field(repr=False, compare=False)
 
 
@@ -69,6 +72,16 @@ def _path(value: str, key: str) -> Path:
     return Path(value)
 
 
+def parse_date(value: str, key: str) -> date:
+    """Require a calendar date in the exact YYYY-MM-DD form."""
+    try:
+        if not isinstance(value, str) or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) is None:
+            raise ValueError
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{key} must be YYYY-MM-DD") from None
+
+
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
     """Read and validate all configuration without revealing secret values."""
     retry = tuple(
@@ -91,6 +104,11 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         timezone = ZoneInfo(env.get("STOKE_TIMEZONE", "Europe/Istanbul"))
     except (ZoneInfoNotFoundError, ValueError):
         raise ValueError("STOKE_TIMEZONE must be a valid IANA time zone") from None
+    expiry = env.get("STOKE_CLAUDE_TOKEN_EXPIRES", "")
+    expires_at = (
+        int(datetime.combine(parse_date(expiry, "STOKE_CLAUDE_TOKEN_EXPIRES"), time(), timezone).timestamp())
+        if expiry else None
+    )
     return Settings(
         dry_run=env.get("STOKE_DRY_RUN", "1") not in {"0", "false", "no"},
         tools=_names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS"),
@@ -98,7 +116,6 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         delay_seconds=_integer(env.get("STOKE_DELAY_SECONDS", "90"), "STOKE_DELAY_SECONDS", 0),
         retry_seconds=retry,
         timeout_seconds=timeout,
-        refresh_seconds=_integer(env.get("STOKE_REFRESH_SECONDS", "900"), "STOKE_REFRESH_SECONDS", 60),
         data_dir=_path(env.get("STOKE_DATA_DIR", "/data"), "STOKE_DATA_DIR"),
         host=host,
         port=port,
@@ -108,5 +125,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         dry_run_fail=_names(env.get("STOKE_DRY_RUN_FAIL", ""), "STOKE_DRY_RUN_FAIL", True),
         codex_home=_path(env.get("CODEX_HOME", "/home/stoke/.codex"), "CODEX_HOME"),
         timezone=timezone,
+        claude_reader_dir=_path(env.get("STOKE_CLAUDE_READER_DIR", "/data/claude-reader"), "STOKE_CLAUDE_READER_DIR"),
+        claude_token_expires=expires_at,
         process_env=MappingProxyType(dict(env)),
     )

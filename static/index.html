@@ -8,11 +8,11 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     button, label { -webkit-tap-highlight-color: transparent; }
     button { cursor: pointer; }
     button:disabled, input:disabled { cursor: default; }
-    button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
     h1, h2, p, dl, dd { margin: 0; }
     [hidden] { display: none !important; }
     .page { min-height: 100vh; padding: var(--page-padding); }
@@ -139,6 +139,40 @@
     .dialog-actions button { padding: 8px 16px; }
     .dialog-actions .text-button { margin-right: auto; padding-left: 0; padding-right: 0; }
 
+    .reset-item .reset-source { font-size: 12px; color: #8A939D; }
+    .reset-item .text-button { min-height: 24px; font-size: 12px; }
+    .reset-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
+    .status-ok { color: #C3C9D0; }
+    .status-warn { color: #F5A142; }
+    .status-bad { color: #FF8A7A; }
+    .form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .field { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); font-size: 14px; }
+    .field.num { width: 96px; }
+    .field:disabled { color: #6B737C; }
+    .setting-section { display: flex; flex-direction: column; gap: 10px; }
+    .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
+    .signin-rows { display: flex; flex-direction: column; gap: 8px; }
+    .signin-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
+    .signin-row.warn { background: #2B2113; box-shadow: inset 3px 0 0 #F5A142; }
+    .signin-row.bad { background: #2A1714; box-shadow: inset 3px 0 0 #FF8A7A; }
+    .signin-row .row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+    .signin-row .mono { overflow-wrap: anywhere; }
+    .command { display: block; margin-top: 6px; padding: 6px 8px; border: 1px solid #2C323A; border-radius: 6px; background: #0E1013; color: #C3C9D0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+    .warning.caution { background: #2B2113; border-color: #6B4A1E; color: #FFE2BF; }
+    .info-body { display: flex; flex-direction: column; gap: 16px; }
+    .warn-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 6px 12px; border: 1px solid #7A2A22; border-radius: 8px; background: #2A1714; color: #FFD9D3; font-size: 13px; text-align: left; }
+    .warn-line.caution { border-color: #6B4A1E; background: #2B2113; color: #FFE2BF; }
+    .warn-line .warn-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .warn-line .more { flex: none; font-family: var(--mono); font-size: 12px; color: #FF8A7A; }
+    .warn-line.caution .more { color: #F5A142; }
+    .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #FF8A7A; vertical-align: middle; }
+    .dot.caution { background: #F5A142; }
+    .heading-tools { display: flex; align-items: center; gap: 4px; }
+    .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #8A939D; }
+    .icon-button:hover, .icon-button:focus-visible { color: #F5A142; }
+    .icon-button .dot { position: absolute; top: 10px; right: 10px; margin: 0; }
+    .heading-tools .toggle { margin-left: 10px; }
+
     @media (max-width: 931px) {
       .reset-pop { position: static; width: auto; margin-top: 12px; padding: 0; border: 0; box-shadow: none; background: transparent; }
       .resets-placeholder { display: none; }
@@ -147,6 +181,7 @@
       .header-tools { justify-content: flex-start; }
       .card { padding: 20px; }
       .dial-body { justify-content: center; }
+      #reset-date { min-width: 0; max-width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after, .chevron { transition: none; }
@@ -182,6 +217,48 @@
       </div>
     </form>
   </dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form" class="plan-form">
+      <h2 id="settings-title">Settings</h2>
+      <section class="setting-section">
+        <h3>Auto-refresh usage</h3>
+        <label class="toggle"><input id="ar-enabled" type="checkbox" class="switch"> <span>Read usage automatically</span></label>
+        <div class="form-row"><span>Every</span><input id="ar-value" class="field num" type="number" min="1" step="1" aria-label="Refresh interval"><select id="ar-unit" class="field" aria-label="Interval unit"><option value="60">minutes</option><option value="1">seconds</option></select></div>
+        <p id="ar-hint" class="small muted"></p>
+      </section>
+      <p id="settings-message" class="small failed" role="status" hidden></p>
+      <div class="dialog-actions">
+        <button id="settings-close" type="button" class="refresh">Close</button>
+        <button id="settings-save" type="submit" class="stoke">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="info-dialog" aria-labelledby="info-title">
+    <div class="plan-form">
+      <h2 id="info-title">Info</h2>
+      <div id="info-body" class="info-body"></div>
+      <div class="dialog-actions">
+        <button id="info-close" type="button" class="refresh">Close</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="reset-dialog" aria-labelledby="reset-title">
+    <form id="reset-form" class="plan-form">
+      <h2 id="reset-title">Add a limit reset</h2>
+      <fieldset>
+        <legend>Type</legend>
+        <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
+        <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
+      </fieldset>
+      <label for="reset-date">Expires on <input id="reset-date" class="field" type="date" required></label>
+      <p id="reset-message" class="small failed" role="status" hidden></p>
+      <p class="small muted">Copy it from Claude → Settings → Usage → Limit resets. Stoke can't read Claude's resets: remove it here after you use it.</p>
+      <div class="dialog-actions">
+        <button id="reset-close" type="button" class="refresh">Close</button>
+        <button id="reset-save" type="submit" class="stoke">Add</button>
+      </div>
+    </form>
+  </dialog>
   <script>
     'use strict';
 
@@ -209,8 +286,12 @@
       ['auto_stopped', ['Auto-stoke stopped', 'The CLI kept reporting a reset time in the past, so auto-stoke was switched off to avoid repeated messages. Turn auto-stoke on or press Stoke now to resume.']],
       ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
-      ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']]
+      ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']],
+      ['read_signed_out', ['Usage reading signed out', 'The browser login on the Pi that reads usage has expired. Stoking is not affected. Sign in again from your PC:']],
+      ['token_expiring', ['Stoke token expires soon', '']]
     ]);
+    const LOGIN_COMMAND = 'ssh -t 1 "cd ~/Documents/Projects/stoke && docker compose exec stoke stoke-login claude"';
+    const dialogOpen = () => !!document.querySelector('dialog[open]');
     let state = null;
     let clockOffset = 0;
     let refreshId = 0;
@@ -281,7 +362,12 @@
         else if (last.opened_new_window === false) lastResult = 'Did not open a new window';
         else lastResult = 'Succeeded';
       }
-      const warning = tool.warning ? WARN.get(tool.warning) : null;
+      let warning = tool.warning ? WARN.get(tool.warning) : null;
+      if (tool.warning === 'token_expiring') {
+        const left = tool.auth.stoke.expires_at - current;
+        warning = [left <= 0 ? 'Stoke token expired' : 'Stoke token expires soon',
+          `The 1-year token that stokes Claude ${left <= 0 ? 'has expired; stoking has stopped.' : `expires in ${Math.ceil(left / 86400)} days; after that, stoking stops.`} Create a new one with claude setup-token and put it in the Pi's .env.`];
+      }
       const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '—';
       const lastAgo = last ? `${span(current - last.at)} ago` : '';
       const nextAt = nextTs != null ? clock(nextTs) : 'off';
@@ -292,7 +378,10 @@
       }
       return {
         name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
-        refreshable: !!tool.refreshable, refreshing: !!tool.refreshing, resets: tool.resets,
+        refreshable: !!tool.refreshable, refreshing: !!tool.refreshing,
+        resets: tool.manual_resets_allowed ? { manual: true, credits: tool.manual_resets, available: tool.manual_resets.length } : tool.resets,
+        auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: tool.warning === 'token_expiring',
+        autoRefreshText: tool.auto_refresh?.enabled ? `auto-refresh every ${interval(tool.auto_refresh.seconds)}` : '',
         plan: tool.plan, plan_outcome: tool.plan_outcome, quiet_from: tool.quiet_from,
         open, elapsed, remaining,
         windowRange: five ? `${clock(start)} → ${clock(end)}` : '—',
@@ -308,8 +397,11 @@
         dialLabel: open && five ? `Window ${Math.round(elapsed * 100)}% elapsed, ${remaining} left` : 'Window closed',
         dialCaption: open && five ? `left · ends ${clock(end)}` : 'window closed',
         hasWarning: !!tool.warning, warning: warning ? warning[0] : tool.warning,
-        warningDetail: tool.warning ? `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.` : ''
+        warningDetail: tool.warning ? (['read_signed_out', 'token_expiring'].includes(tool.warning) ? warning[1] : `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.`) : ''
       };
+    }
+    function interval(seconds) {
+      return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
     }
     function el(tag, className = '', text) {
       const element = document.createElement(tag);
@@ -356,9 +448,11 @@
       return header;
     }
     function warning(tool) {
-      const box = el('div', 'warning'), copy = el('div');
+      const box = el('div', `warning${tool.caution ? ' caution' : ''}`), copy = el('div');
       box.append(icon('warning'));
       copy.append(el('strong', '', tool.warning), el('br'), el('span', '', tool.warningDetail));
+      if (tool.caution) box.querySelector('svg').setAttribute('stroke', '#F5A142');
+      if (tool.warningKey === 'read_signed_out') copy.append(el('code', 'command', LOGIN_COMMAND));
       box.append(copy);
       return box;
     }
@@ -392,7 +486,7 @@
       button.setAttribute('data-tool', tool.name);
       button.setAttribute('data-action', 'refresh');
       button.setAttribute('aria-label', `Read ${tool.label} usage now without stoking`);
-      button.setAttribute('title', tool.refreshable ? 'Read usage and limit resets now. Sends no message and opens no window.' : `${tool.label} usage can only be read by stoking.`);
+      button.setAttribute('title', 'Read usage now. Sends no message and opens no window.');
       button.disabled = !tool.refreshable || tool.refreshing || tool.running || busy.has(tool.name);
       button.addEventListener('click', () => act(tool.name, 'refresh'));
       return button;
@@ -416,7 +510,7 @@
       const sorted = [...resets.credits].sort((a, b) => a.expires_at - b.expires_at);
       const first = sorted[0], soonFirst = first && first.expires_at - current < RESET_SOON_SECONDS;
       count.append(el('span', 'chevron', '›'), el('span', 'resets-title', 'Limit resets'),
-        el('span', 'stat-value', resets.available ? `${resets.available} available` : 'none available'));
+        el('span', 'stat-value', resets.available ? `${resets.available} available` : resets.manual ? 'none added' : 'none available'));
       head.append(count);
       if (first) head.append(el('span', `small ${soonFirst ? 'soon-text' : 'muted'}`,
         `next expires ${when(first.expires_at, current)} · in ${span(first.expires_at - current)}`));
@@ -427,10 +521,27 @@
         const item = el('li', `reset-item${soon ? ' soon' : ''}`);
         item.append(el('span', '', credit.title), el('span', 'mono reset-when',
           `expires ${when(credit.expires_at, current)} · in ${span(left)}`));
+        if (resets.manual) {
+          const remove = el('button', 'text-button', 'Remove');
+          remove.setAttribute('type', 'button');
+          remove.setAttribute('data-key', `${tool.name}:reset-remove:${credit.id}`);
+          remove.setAttribute('data-tool', tool.name);
+          remove.disabled = busy.has(tool.name);
+          remove.addEventListener('click', () => act(tool.name, 'resets/remove', { id: credit.id }));
+          item.append(el('span', 'reset-source', 'added by you'), remove);
+        }
         list.append(item);
       });
       if (sorted.length) pop.append(list);
-      pop.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
+      if (resets.manual) {
+        const tools = el('div', 'reset-tools'), add = el('button', 'text-button', '+ Add a reset');
+        add.setAttribute('type', 'button');
+        add.setAttribute('data-key', `${tool.name}:reset-add`);
+        add.addEventListener('click', () => openReset(tool.name));
+        tools.append(add);
+        pop.append(tools);
+        pop.append(el('p', 'reset-note', `Entered by you: stoke can't read ${tool.label}'s resets. Remove one after you use it in the ${tool.label} app. Stoke never spends one.`));
+      } else pop.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
       box.append(pop);
       return box;
     }
@@ -586,6 +697,171 @@
         planSave.focus();
       } else planDialog.close();
     });
+    function readStatus(record, current) {
+      if (!record) return 'not read yet';
+      const at = readTime(record.at, current);
+      if (record.ok) return `✓ last read ${at}`;
+      if (record.signed_out) return `✕ signed out since ${at}`;
+      return `✕ last read failed ${at}: ${record.error}`;
+    }
+    function signinState(tool, current = now()) {
+      const auth = tool.auth, rows = [];
+      const status = readStatus(tool.last_read, current), level = tool.last_read && !tool.last_read.ok ? 'bad' : 'ok';
+      if (auth.shared) return [{ title: 'Stoking and reading usage', kind: auth.shared.label, status, level }];
+      if (auth.stoke) {
+        const expires = auth.stoke.expires_at, left = expires - current, soon = expires != null && left < 30 * 86400;
+        const expiry = expires == null ? 'expiry not set' : `${soon ? '⚠ ' : ''}expires ${dateText(expires)} ${localDate(expires).year} · ${left <= 0 ? 'expired' : `in ${span(left)}`}`;
+        rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok' });
+      }
+      if (auth.read) rows.push({ title: 'Reading usage', kind: auth.read.label, status, level });
+      return rows;
+    }
+    const dialogFocus = new Map();
+    function infoContent(tool) {
+      const parts = [];
+      if (tool.hasWarning) parts.push(warning(tool));
+      const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
+      section.append(el('h3', '', 'Sign-in'));
+      signinState(tool).forEach(row => {
+        const box = el('div', `signin-row${row.level === 'ok' ? '' : ' ' + row.level}`), head = el('div', 'row-head');
+        head.append(el('strong', '', row.title), el('span', 'muted', row.kind));
+        box.append(head, el('span', `mono status-${row.level}`, row.status));
+        rows.append(box);
+      });
+      section.append(rows);
+      parts.push(section);
+      return parts;
+    }
+    function dot(tool) { return el('span', `dot${tool.caution ? ' caution' : ''}`); }
+    const infoDialog = document.querySelector('#info-dialog');
+    let infoTool = null;
+    function openInfo(name) {
+      const tool = view(state.tools[name]);
+      infoTool = name;
+      dialogFocus.set(infoDialog, document.activeElement?.dataset?.key);
+      document.querySelector('#info-title').textContent = `${tool.label} info`;
+      document.querySelector('#info-body').replaceChildren(...infoContent(tool));
+      infoDialog.showModal();
+    }
+    document.querySelector('#info-close').addEventListener('click', () => infoDialog.close());
+    function warnLine(tool) {
+      const line = el('button', `warn-line${tool.caution ? ' caution' : ''}`);
+      line.setAttribute('type', 'button');
+      line.setAttribute('data-key', `${tool.name}:warning`);
+      line.append(el('span', '', '⚠'), el('span', 'warn-text', tool.warning), el('span', 'more', 'details ›'));
+      line.addEventListener('click', event => { event.stopPropagation(); openInfo(tool.name); });
+      return line;
+    }
+    function iconButton(tool, kind) {
+      const button = el('button', 'icon-button');
+      button.setAttribute('type', 'button');
+      button.setAttribute('data-key', `${tool.name}:${kind}`);
+      const label = kind === 'settings' ? 'Settings' : 'Info';
+      button.setAttribute('aria-label', `${tool.label} ${label}`);
+      button.setAttribute('title', label);
+      const image = svg('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+      if (kind === 'settings') {
+        ['M4 7h9', 'M17 7h3', 'M4 17h3', 'M11 17h9'].forEach(d => image.append(svg('path', { d })));
+        image.append(svg('circle', { cx: 15, cy: 7, r: 2 }), svg('circle', { cx: 9, cy: 17, r: 2 }));
+      } else {
+        image.append(svg('circle', { cx: 12, cy: 12, r: 9 }), svg('path', { d: 'M12 11v5' }), svg('path', { d: 'M12 8h.01' }));
+      }
+      button.append(image);
+      if (kind === 'info' && tool.hasWarning) button.append(dot(tool));
+      button.addEventListener('click', () => kind === 'settings' ? openSettings(tool.name) : openInfo(tool.name));
+      return button;
+    }
+    const settingsDialog = document.querySelector('#settings-dialog');
+    const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value'), arUnit = document.querySelector('#ar-unit');
+    const settingsMessage = document.querySelector('#settings-message'), settingsSave = document.querySelector('#settings-save');
+    let settingsTool = null, settingsSaving = false;
+    function arSeconds() { return Number(arValue.value) * Number(arUnit.value); }
+    function syncSettings() {
+      const seconds = arSeconds();
+      const bad = !Number.isInteger(seconds) || seconds < 60 || seconds > 86400;
+      arEnabled.disabled = settingsSaving;
+      arValue.disabled = arUnit.disabled = settingsSaving || !arEnabled.checked;
+      settingsSave.disabled = settingsSaving || bad;
+      document.querySelector('#settings-close').disabled = settingsSaving;
+      settingsMessage.textContent = bad ? 'The interval must be between 60 seconds and 24 hours.' : '';
+      settingsMessage.hidden = !bad;
+    }
+    function openSettings(name) {
+      if (settingsSaving) return;
+      settingsTool = name;
+      const tool = state.tools[name], ar = tool.auto_refresh;
+      document.querySelector('#settings-title').textContent = `${tool.label} settings`;
+      arEnabled.checked = ar.enabled;
+      arUnit.value = ar.seconds % 60 === 0 ? '60' : '1';
+      arValue.value = ar.seconds / Number(arUnit.value);
+      document.querySelector('#ar-hint').textContent = name === 'claude'
+        ? 'Reads usage without sending a message. Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude. ↻ Refresh usage always works.'
+        : 'Reads Codex usage without sending a message. ↻ Refresh usage always works.';
+      syncSettings();
+      dialogFocus.set(settingsDialog, document.activeElement?.dataset?.key);
+      settingsDialog.showModal();
+    }
+    [arEnabled, arValue, arUnit].forEach(control => control.addEventListener('input', syncSettings));
+    document.querySelector('#settings-close').addEventListener('click', () => settingsDialog.close());
+    document.querySelector('#settings-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (settingsSave.disabled) return;
+      const body = { enabled: arEnabled.checked, seconds: arSeconds() };
+      settingsSaving = true;
+      syncSettings();
+      try {
+        await post(settingsTool, 'auto-refresh', body);
+        await refresh();
+        settingsDialog.close();
+      } catch (failure) {
+        settingsMessage.textContent = failure.message;
+        settingsMessage.hidden = false;
+      } finally {
+        settingsSaving = false;
+        arEnabled.disabled = false;
+        arValue.disabled = arUnit.disabled = !arEnabled.checked;
+        settingsSave.disabled = false;
+        document.querySelector('#settings-close').disabled = false;
+      }
+    });
+    const resetDialog = document.querySelector('#reset-dialog');
+    const resetForm = document.querySelector('#reset-form'), resetMessage = document.querySelector('#reset-message');
+    let resetTool = null, resetSaving = false;
+    function openReset(name) {
+      if (resetSaving) return;
+      resetTool = name;
+      resetForm.reset();
+      resetMessage.hidden = true;
+      document.querySelector('#reset-title').textContent = `Add a ${state.tools[name].label} limit reset`;
+      dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
+      resetDialog.showModal();
+    }
+    document.querySelector('#reset-close').addEventListener('click', () => resetDialog.close());
+    resetForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (resetSaving) return;
+      const body = { title: resetForm.querySelector('[name="reset-type"]:checked').value, expires_on: document.querySelector('#reset-date').value };
+      resetSaving = true;
+      resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = true; });
+      resetMessage.hidden = true;
+      try {
+        await post(resetTool, 'resets', body);
+        await refresh();
+        resetDialog.close();
+      } catch (failure) {
+        resetMessage.textContent = failure.message;
+        resetMessage.hidden = false;
+      } finally {
+        resetSaving = false;
+        resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = false; });
+      }
+    });
+    [settingsDialog, infoDialog, resetDialog].forEach(dialog => {
+      dialog.querySelectorAll('button, input, select').forEach((control, index) => {
+        control.setAttribute('data-key', control.id || `${dialog.id}:${index}`);
+      });
+      dialog.addEventListener('close', () => restoreFocus(dialogFocus.get(dialog)));
+    });
     function toolTitle(tool) {
       const title = el('div', 'tool-title');
       title.append(el('h2', '', tool.label), text('span', `chip ${tool.running ? 'running' : tool.open ? '' : 'closed'}`, tool, 'dialStatus'));
@@ -625,10 +901,10 @@
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
       if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
-      if (!planDialog.open) restoreFocus(deferredFocus);
+      if (!dialogOpen()) restoreFocus(deferredFocus);
     }
     function restoreFocus(key) {
-      if (!key) return;
+      if (!key || dialogOpen()) return;
       const control = Array.from(app.querySelectorAll('[data-key]')).find(element => element.dataset.key === key);
       if (control && !control.disabled) {
         control.focus({ preventScroll: true });
@@ -644,12 +920,13 @@
       expanded.delete(box.dataset.popover);
     }
     document.addEventListener('click', event => {
+      if (dialogOpen()) return;
       app.querySelectorAll('details.popover[open]').forEach(box => {
         if (!box.contains(event.target)) closePopover(box);
       });
     }, true);
     document.addEventListener('keydown', event => {
-      if (event.key !== 'Escape' || planDialog.open) return;
+      if (event.key !== 'Escape' || dialogOpen()) return;
       const boxes = Array.from(app.querySelectorAll('details.popover[open]'));
       const focused = boxes.find(box => box.contains(document.activeElement)) ?? boxes.at(-1);
       boxes.forEach(closePopover);
@@ -680,7 +957,7 @@
     }
     async function act(name, action, body) {
       if (busy.has(name) || (action === 'refresh' && !state?.tools[name]?.refreshable)) return;
-      deferredFocus = document.activeElement?.dataset?.key ?? null;
+      deferredFocus = action === 'resets/remove' ? `${name}:resets` : document.activeElement?.dataset?.key ?? null;
       busy.add(name);
       inFlightActions.set(name, action);
       syncControls();
@@ -725,7 +1002,7 @@
       }
     }
     function render() {
-      const focusKey = planDialog.open ? null : document.activeElement?.dataset?.key ?? deferredFocus;
+      const focusKey = dialogOpen() ? null : document.activeElement?.dataset?.key ?? deferredFocus;
       app.querySelectorAll('details.popover').forEach(box => {
         box.open ? expanded.add(box.dataset.popover) : expanded.delete(box.dataset.popover);
       });
@@ -735,6 +1012,9 @@
       app.querySelectorAll('.resets-head').forEach(head => resetsObserver.observe(head));
       syncResetPlaceholders();
       if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
+      if (infoDialog.open && state.tools[infoTool]) {
+        document.querySelector('#info-body').replaceChildren(...infoContent(view(state.tools[infoTool])));
+      }
       tick();
       restoreFocus(focusKey);
     }
@@ -762,9 +1042,11 @@
       const main = el('main', 'cards');
       vm.forEach(tool => {
         const card = el('section', 'card');
-        if (tool.hasWarning) card.append(warning(tool));
+        if (tool.hasWarning) card.append(warnLine(tool));
         const heading = el('div', 'card-heading');
-        heading.append(toolTitle(tool), autoControl(tool));
+        const tools = el('div', 'heading-tools');
+        tools.append(iconButton(tool, 'settings'), iconButton(tool, 'info'), autoControl(tool));
+        heading.append(toolTitle(tool), tools);
         const body = el('div', 'dial-body'), dial = el('div', 'dial');
         const ring = live(svg('svg', { width: 200, height: 200, viewBox: '0 0 200 200', role: 'img', 'aria-label': tool.dialLabel }), 'dialLabel', tool);
         ring.append(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', stroke: '#252A30', 'stroke-width': 12 }));
@@ -800,6 +1082,7 @@
       group.append(label, track);
       if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
       if (weekly && tool.limitsAt) group.append(text('span', 'weekly-reset', tool, 'limitsAt'));
+      if (weekly && tool.autoRefreshText) group.append(el('span', 'weekly-reset', tool.autoRefreshText));
       return group;
     }
 

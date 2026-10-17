@@ -126,7 +126,7 @@ def test_provider_argv_cwd_environment_and_duration(
         path = write_rollout(settings, fixture_text("codex_rollout.jsonl"))
     calls: list[tuple[Sequence[str], Path, float, Mapping[str, str] | None]] = []
     delete_path_states: list[tuple[bool, bool]] = []
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         calls.append((argv, cwd, timeout_s, env))
         if name == "codex" and tuple(argv[:3]) == DELETE_ARGV_PREFIX:
             delete_path_states.append((path.exists(), path.parent.is_dir()))
@@ -169,7 +169,7 @@ def test_provider_failures(
     name: str, failure: str, settings_factory: Callable[..., Settings], fixture_text: Callable[[str], str],
 ) -> None:
     settings = settings_factory()
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         if failure == "missing_binary":
             raise FileNotFoundError("synthetic sensitive text")
         text = fixture_text("claude_error.jsonl" if name == "claude" else "codex_failed.jsonl") if failure == "cli_error" else ""
@@ -189,7 +189,7 @@ def test_codex_missing_or_empty_rollout(
     settings = settings_factory()
     if rollout is not None:
         write_rollout(settings, rollout)
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         return CommandResult(0, fixture_text("codex_stream.jsonl"), "", 2, False)
     with pytest.raises(LimitsUnreadable):
         asyncio.run(CodexProvider(settings, runner).stoke())
@@ -221,7 +221,7 @@ def test_codex_removes_only_its_read_rollout_and_preserves_outcome(
 
     monkeypatch.setattr(Path, "unlink", unlink)
 
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         return CommandResult(0, fixture_text("codex_stream.jsonl"), "", 42, False)
 
     if readable:
@@ -274,7 +274,7 @@ def test_codex_deletes_session_on_failure(
         })
         stdout = event + "\n" + stdout if failure == "error_before_thread" else stdout + "\n" + event
     calls: list[tuple[Sequence[str], Path, float, Mapping[str, str] | None]] = []
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         calls.append((argv, cwd, timeout_s, env))
         if tuple(argv[:3]) == DELETE_ARGV_PREFIX:
             return CommandResult(0, "", "", 99, False)
@@ -308,7 +308,7 @@ def test_codex_skips_delete_without_canonical_uuid(
 ) -> None:
     stdout = "" if thread_id is None else json.dumps({"type": "thread.started", "thread_id": thread_id})
     calls: list[Sequence[str]] = []
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         calls.append(argv)
         return CommandResult(0, stdout, "", 42, False)
     with pytest.raises(LimitsUnreadable):
@@ -327,7 +327,7 @@ def test_codex_deletes_uppercase_uuid(
     thread_id = THREAD.upper()
     path = write_rollout(settings, fixture_text("codex_rollout.jsonl"), thread_id)
     calls: list[Sequence[str]] = []
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         calls.append(argv)
         return CommandResult(0, json.dumps({"type": "thread.started", "thread_id": thread_id}), "", 42, False)
     result = asyncio.run(CodexProvider(settings, runner).stoke())
@@ -344,7 +344,7 @@ def test_codex_delete_failure_preserves_outcome_and_logs_safely(
     settings = settings_factory()
     path = write_rollout(settings, fixture_text("codex_rollout.jsonl") if readable else '{}')
     calls: list[Sequence[str]] = []
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         calls.append(argv)
         if tuple(argv[:3]) == DELETE_ARGV_PREFIX:
             assert not path.exists()
@@ -431,7 +431,7 @@ def test_codex_unexpected_directory_cleanup_error_preserves_outcome(
     def remove_dirs(codex_home: Path) -> None:
         raise RuntimeError("sk-ant-secret private path")
     monkeypatch.setattr("stoke.providers.codex.remove_empty_session_dirs", remove_dirs)
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         return CommandResult(0, fixture_text("codex_stream.jsonl"), "", 42, False)
     if readable:
         result = asyncio.run(CodexProvider(settings, runner).stoke())
@@ -471,7 +471,7 @@ def test_codex_directory_cleanup_skips_symlinks(
 def test_nonzero_exit_overrides_readable_limits(
     settings_factory: Callable[..., Settings], fixture_text: Callable[[str], str],
 ) -> None:
-    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None) -> CommandResult:
+    async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None, *, stdin: bytes | None = None) -> CommandResult:
         return CommandResult(7, fixture_text("claude_stream.jsonl"), "failed", 2, False)
     with pytest.raises(ProviderError, match="failed"):
         asyncio.run(ClaudeProvider(settings_factory(), runner).stoke())
@@ -643,9 +643,9 @@ def test_registry_dry_run_preserves_real_reader_capabilities(settings_factory: C
     dry = create_providers(settings_factory())
     real = create_providers(settings_factory(STOKE_DRY_RUN="0"))
     assert isinstance(dry["codex"], DryRunReader)
-    assert not hasattr(dry["claude"], "read_limits")
+    assert isinstance(dry["claude"], DryRunReader)
     assert callable(getattr(real["codex"], "read_limits"))
-    assert not hasattr(real["claude"], "read_limits")
+    assert callable(getattr(real["claude"], "read_limits"))
 
 
 @pytest.mark.parametrize("fail", [False, True])

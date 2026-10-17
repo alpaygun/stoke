@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -82,6 +82,7 @@ class LimitsSnapshot:
     five_hour: Window
     weekly: Window | None
     resets: ResetCredits | None
+    observed_at: int | None = None
 
 
 @dataclass
@@ -106,6 +107,45 @@ class StokeRecord:
 
 
 @dataclass
+class AutoRefresh:
+    """Persisted opt-in usage reading and its interval."""
+
+    enabled: bool = False
+    seconds: int = 300
+
+
+def validate_auto_refresh(enabled: bool, seconds: int) -> None:
+    """Reject coercion and intervals outside one minute to one day."""
+    if type(enabled) is not bool:
+        raise ValueError("enabled must be bool")
+    if type(seconds) is not int or not 60 <= seconds <= 86400:
+        raise ValueError("seconds must be an integer between 60 and 86400")
+
+
+@dataclass
+class ReadRecord:
+    """Outcome of the most recent usage read, independent of stokes."""
+
+    at: int
+    ok: bool
+    error: str | None
+    signed_out: bool
+
+
+MANUAL_RESET_TITLES = {"Full reset", "5-hour reset"}
+
+
+@dataclass
+class ManualReset:
+    """A reset credit entered by the user and never spent by stoke."""
+
+    id: str
+    title: str
+    expires_at: int
+    added_at: int
+
+
+@dataclass
 class ToolState:
     """Current limits, scheduling and attempt state for one tool."""
 
@@ -125,11 +165,15 @@ class ToolState:
     refreshing: bool = False
     plan: Plan | None = None
     plan_outcome: PlanOutcome | None = None
+    auto_refresh: AutoRefresh = field(default_factory=AutoRefresh)
+    last_read: ReadRecord | None = None
+    manual_resets: list[ManualReset] = field(default_factory=list)
 
 
 def serialize_tool(
     state: ToolState, now: int | None = None, refreshable: bool = False,
-    *, settings: "Settings | None" = None,
+    *, settings: "Settings | None" = None, manual_resets_allowed: bool = False,
+    auth_labels: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Serialize persisted fields, adding live fields only for API responses."""
     data = asdict(state)
@@ -144,6 +188,17 @@ def serialize_tool(
             raise ValueError("settings required for live serialization")
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now
         data["refreshable"] = refreshable
+        data["manual_resets_allowed"] = manual_resets_allowed
+        data["manual_resets"] = [asdict(entry) for entry in state.manual_resets if entry.expires_at > now]
+        data["auth"] = {key: dict(value) for key, value in (auth_labels or {}).items()}
+        expires = settings.claude_token_expires if state.name == "claude" else None
+        if state.name == "claude" and "stoke" in data["auth"]:
+            data["auth"]["stoke"]["expires_at"] = expires
+        if state.warning is None:
+            if state.last_read is not None and state.last_read.signed_out:
+                data["warning"] = "read_signed_out"
+            elif expires is not None and expires - now < 30 * 86400:
+                data["warning"] = "token_expiring"
         data["upcoming_at"], data["upcoming_planned"] = effective_next(state, settings)
         data["quiet_from"] = state.plan.target_at - PLAN_QUIET_SECONDS if state.plan is not None else None
     return data

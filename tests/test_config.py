@@ -17,7 +17,8 @@ def test_defaults_and_frozen_environment_snapshot() -> None:
     assert settings.delay_seconds == 90
     assert settings.retry_seconds == (60, 300, 900, 1800, 3600)
     assert settings.timeout_seconds == 180
-    assert settings.refresh_seconds == 900
+    assert settings.claude_reader_dir == Path("/data/claude-reader")
+    assert settings.claude_token_expires is None
     assert settings.data_dir == Path("/data")
     assert settings.host == "0.0.0.0" and settings.port == 8787
     assert settings.dry_run_window_seconds == 18000 and settings.dry_run_fail == ()
@@ -48,8 +49,7 @@ def test_dry_run_is_disabled_only_by_exact_values(value: str, expected: bool) ->
     ("STOKE_PORT", "0"), ("STOKE_PORT", "65536"), ("STOKE_HOST", " "),
     ("STOKE_DRY_RUN_WINDOW_SECONDS", "0"), ("STOKE_DRY_RUN_FAIL", "other"),
     ("STOKE_DATA_DIR", ""), ("CODEX_HOME", ""),
-    ("STOKE_REFRESH_SECONDS", "59"), ("STOKE_REFRESH_SECONDS", "0"),
-    ("STOKE_REFRESH_SECONDS", "1.5"), ("STOKE_REFRESH_SECONDS", "invalid"),
+    ("STOKE_CLAUDE_READER_DIR", ""),
 ])
 def test_invalid_configuration_names_the_variable(key: str, value: str) -> None:
     with pytest.raises(ValueError, match=key):
@@ -69,11 +69,6 @@ def test_overrides_and_display_order() -> None:
     assert settings.host == "127.0.0.1" and settings.port == 9000
     assert settings.dry_run_window_seconds == 30 and settings.dry_run_fail == ("codex",)
     assert settings.data_dir == Path("data") and settings.codex_home == Path("codex-home")
-
-
-@pytest.mark.parametrize("seconds", [60, 900, 1800])
-def test_refresh_interval_minimum_and_override(seconds: int) -> None:
-    assert load_settings({"STOKE_REFRESH_SECONDS": str(seconds)}).refresh_seconds == seconds
 
 
 @pytest.mark.parametrize("key", ["Unknown/Zone", "", "../Europe/Istanbul", "/Europe/Istanbul"])

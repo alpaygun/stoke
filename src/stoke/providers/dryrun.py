@@ -16,11 +16,14 @@ class DryRunProvider:
     def __init__(
         self, name: str, label: str, settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        *, manual_resets: bool = False, auth_labels: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self.name = name
         self.label = label
         self.settings = settings
         self.sleep = sleep
+        self.manual_resets = manual_resets
+        self.auth_labels = {key: dict(value) for key, value in (auth_labels or {}).items()}
 
     async def stoke(self) -> StokeResult:
         """Simulate a stoke, optionally failing the configured tool."""
@@ -51,5 +54,5 @@ class DryRunReader(DryRunProvider):
         ]
         return LimitsSnapshot(
             Window(3.0, now + self.settings.dry_run_window_seconds, 300),
-            Window(27.0, now + 7 * 24 * 3600, 10080), ResetCredits(3, credits, 0),
+            Window(27.0, now + 7 * 24 * 3600, 10080), None if self.manual_resets else ResetCredits(3, credits, 0),
         )

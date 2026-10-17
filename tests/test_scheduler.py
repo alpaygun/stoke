@@ -12,7 +12,7 @@ import pytest
 
 from conftest import FakeProvider, FakeReader
 from stoke.config import Settings
-from stoke.models import LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, Window
+from stoke.models import ReadRecord, LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, Window
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
@@ -713,7 +713,7 @@ def test_refresh_updates_only_usage_and_read_data_at_completion(
         provider.read_release.set()
         assert await task is state
         expected = replace(
-            before, five_hour=None if five_hour is None else replace(five_hour, used_percent=8),
+            before, last_read=ReadRecord(1005, True, None, False), five_hour=None if five_hour is None else replace(five_hour, used_percent=8),
             weekly=snapshot.weekly if optional_data else before.weekly, limits_at=1005,
             resets=ResetCredits(1, snapshot.resets.credits, 1005) if optional_data else before.resets,
         )
@@ -747,7 +747,11 @@ def test_refresh_failure_preserves_state_and_safe_warning(
             assert error.value is failure
         else:
             assert str(error.value) == "unexpected provider error"
-        assert state == before and scheduler.path.read_bytes() == previous_file
+        assert state.last_read is not None and not state.last_read.ok
+        assert state.last_read.error == str(error.value)
+        before.last_read = state.last_read
+        assert state == before and scheduler.path.read_bytes() != previous_file
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["codex"] == state
         assert not state.refreshing and not scheduler._attempts
     asyncio.run(scenario())
     expected = str(failure) if isinstance(failure, ProviderError) else "ValueError"
@@ -806,117 +810,6 @@ def test_refresh_capability_requires_callable_and_claude_is_unsupported(settings
         asyncio.run(scheduler.refresh_limits("claude"))
 
 
-def test_periodic_refresh_starts_immediately_retries_and_skips_busy_ticks(
-    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        provider = FakeReader()
-        scheduler = make_scheduler(settings_factory(STOKE_REFRESH_SECONDS="60"), provider)
-        waits: asyncio.Queue[tuple[float, asyncio.Event]] = asyncio.Queue()
-        async def sleep(seconds: float) -> None:
-            gate = asyncio.Event()
-            waits.put_nowait((seconds, gate))
-            await gate.wait()
-        monkeypatch.setattr("stoke.scheduler.asyncio.sleep", sleep)
-        await scheduler.start()
-        loop = scheduler.refresh_tasks["codex"]
-        await scheduler.start()
-        try:
-            for tick in range(4):
-                seconds, gate = await asyncio.wait_for(waits.get(), 0.5)
-                assert seconds == (REFRESH_BUSY_RETRY_SECONDS if tick == 2 else 60)
-                assert not scheduler.locks["codex"].locked()
-                assert not loop.done()
-                if tick == 0:
-                    assert provider.read_calls == 1
-                    provider.read_result = ProviderError("read unavailable")
-                elif tick == 1:
-                    assert provider.read_calls == 2
-                    scheduler.states["codex"].running = True
-                elif tick == 2:
-                    assert provider.read_calls == 2
-                    scheduler.states["codex"].running = False
-                    provider.read_result = LimitsSnapshot(Window(5, 0, 300), None, None)
-                else:
-                    assert provider.read_calls == 3 and provider.calls == 0
-                    break
-                gate.set()
-        finally:
-            await scheduler.stop()
-        assert loop.cancelled() and not scheduler.tasks and not scheduler.refresh_tasks
-    asyncio.run(scenario())
-
-
-def test_startup_refresh_retries_after_stoke_finishes(
-    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        provider = FakeReader()
-        provider.release = asyncio.Event()
-        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
-        waits: asyncio.Queue[tuple[float, asyncio.Event]] = asyncio.Queue()
-        async def sleep(seconds: float) -> None:
-            gate = asyncio.Event()
-            waits.put_nowait((seconds, gate))
-            await gate.wait()
-        monkeypatch.setattr("stoke.scheduler.asyncio.sleep", sleep)
-        monkeypatch.setattr("stoke.scheduler.clock.now", lambda: 1000)
-        await scheduler.start()
-        loop = scheduler.refresh_tasks["codex"]
-        try:
-            seconds, gate = await asyncio.wait_for(waits.get(), 0.5)
-            state = scheduler.states["codex"]
-            assert seconds == REFRESH_BUSY_RETRY_SECONDS == 10
-            assert state.running and provider.calls == 1 and provider.read_calls == 0
-            assert state.resets is None
-            provider.release.set()
-            gate.set()
-            seconds, _ = await asyncio.wait_for(waits.get(), 0.5)
-            assert seconds == scheduler.settings.refresh_seconds == 900
-            assert not state.running and provider.read_calls == 1
-            assert state.last_stoke is not None and state.last_stoke.trigger == "startup"
-            assert state.resets is not None and state.resets.available == 1
-            assert not loop.done()
-        finally:
-            await scheduler.stop()
-        assert loop.cancelled()
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("error", [ProviderError("read unavailable"), RuntimeError("unexpected")])
-def test_periodic_refresh_failure_waits_full_interval(
-    error: Exception, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
-        scheduler = make_scheduler(settings_factory(), FakeReader())
-        attempts = 0
-        waits: asyncio.Queue[tuple[float, asyncio.Event]] = asyncio.Queue()
-        async def refresh_limits(name: str) -> ToolState:
-            nonlocal attempts
-            assert name == "codex"
-            attempts += 1
-            raise error
-        async def sleep(seconds: float) -> None:
-            gate = asyncio.Event()
-            waits.put_nowait((seconds, gate))
-            await gate.wait()
-        monkeypatch.setattr(scheduler, "refresh_limits", refresh_limits)
-        monkeypatch.setattr("stoke.scheduler.asyncio.sleep", sleep)
-        await scheduler.start()
-        loop = scheduler.refresh_tasks["codex"]
-        try:
-            for expected_attempts in (1, 2):
-                seconds, gate = await asyncio.wait_for(waits.get(), 0.5)
-                assert seconds == scheduler.settings.refresh_seconds == 900
-                assert attempts == expected_attempts and not loop.done()
-                if expected_attempts == 1:
-                    gate.set()
-        finally:
-            await scheduler.stop()
-        assert loop.cancelled()
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize("periodic", [False, True])
 def test_stop_cancels_inflight_refresh_and_clears_live_flag(periodic: bool, settings_factory: Callable[..., Settings]) -> None:
     async def scenario() -> None:
@@ -924,6 +817,7 @@ def test_stop_cancels_inflight_refresh_and_clears_live_flag(periodic: bool, sett
         provider.read_release = asyncio.Event()
         scheduler = make_scheduler(settings_factory(), provider)
         if periodic:
+            scheduler.set_auto_refresh("codex", True, 300)
             await scheduler.start()
             task = scheduler.refresh_tasks["codex"]
         else:

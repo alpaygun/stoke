@@ -11,7 +11,7 @@ from . import clock
 from .config import Settings
 from .models import ToolState, serialize_tool
 from .providers.base import ProviderError
-from .scheduler import AlreadyRunning, PlanConflict, RefreshUnsupported, Scheduler
+from .scheduler import AlreadyRunning, ManualResetsUnsupported, PlanConflict, RefreshUnsupported, Scheduler
 
 STATIC_PAGE = Path(__file__).resolve().parents[2] / "static" / "index.html"
 
@@ -42,6 +42,8 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         return serialize_tool(
             state, clock.now() if now is None else now,
             refreshable=scheduler.can_refresh(state.name), settings=settings,
+            manual_resets_allowed=scheduler.providers[state.name].manual_resets,
+            auth_labels=scheduler.providers[state.name].auth_labels,
         )
 
     @app.get("/api/state")
@@ -115,6 +117,44 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
             raise HTTPException(422, "body must contain enabled: bool")
         state = scheduler.set_auto(name, body["enabled"])
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/auto-refresh")
+    async def set_auto_refresh(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        if not scheduler.can_refresh(name):
+            raise HTTPException(404, "refresh not supported")
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"enabled", "seconds"}:
+                raise ValueError("body must contain exactly enabled: bool and seconds: int")
+            state = scheduler.set_auto_refresh(name, body["enabled"], body["seconds"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/resets")
+    async def add_reset(name: str, request: Request) -> dict[str, Any]:
+        return await change_reset(name, request, remove=False)
+
+    @app.post("/api/tools/{name}/resets/remove")
+    async def remove_reset(name: str, request: Request) -> dict[str, Any]:
+        return await change_reset(name, request, remove=True)
+
+    async def change_reset(name: str, request: Request, *, remove: bool) -> dict[str, Any]:
+        require_tool(name)
+        if not scheduler.providers[name].manual_resets:
+            raise HTTPException(404, "manual resets not supported")
+        try:
+            body = await request.json()
+            keys = {"id"} if remove else {"title", "expires_on"}
+            if not isinstance(body, dict) or set(body) != keys or any(not isinstance(value, str) for value in body.values()):
+                raise ValueError("body must contain exactly " + ("id: str" if remove else "title: str and expires_on: YYYY-MM-DD"))
+            state = scheduler.remove_manual_reset(name, body["id"]) if remove else scheduler.add_manual_reset(name, body["title"], body["expires_on"])
+        except ManualResetsUnsupported:
+            raise HTTPException(404, "manual resets not supported") from None
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
         return serialize(state)
 
     @app.get("/healthz")

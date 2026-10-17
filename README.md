@@ -13,7 +13,9 @@ Works with Claude Code and Codex CLI. Runs in Docker (built for a Raspberry Pi, 
 - Only the official, unmodified CLIs talk to the vendors. Stoke never calls vendor APIs with your token.
 - A stoke costs a tiny fraction of the weekly limit; it does not raise any limit, it only shifts when windows start.
 
-For Codex, usage and available limit resets are read with the official `codex app-server` (`account/rateLimits/read`) at startup, every `STOKE_REFRESH_SECONDS` (900 seconds by default), and on demand from the panel. This sends no message and never spends a reset.
+Codex usage and available limit resets are read through the official `codex app-server` (`account/rateLimits/read`). Claude usage is read without a message through the official CLI's `get_usage` control request, using a separate browser login in `STOKE_CLAUDE_READER_DIR` (default `/data/claude-reader`). Create that login with `docker compose exec stoke stoke-login claude`; the stoke token stays unchanged. Reads never spend a reset or change stoke scheduling.
+
+Refresh usage on demand from the panel, or enable auto-refresh per tool in Settings (off by default, 60 seconds to 24 hours). Claude reset credits cannot be read and can be entered by hand in the panel; remove them after use. Set `STOKE_CLAUDE_TOKEN_EXPIRES=YYYY-MM-DD` to enable the token-expiry warning.
 
 Plans let you start a tool's window at a chosen local time, once or every day, even with auto-stoke off. Automatic stokes pause in the five-hour quiet zone before that time so an earlier window does not overlap it. A plan can keep auto-stoke as it is or switch it on/off after a successful planned stoke (`auto_after`). Manual stoking in the quiet zone asks for confirmation before skipping that occurrence; daily plans continue the next day. Plan times use `STOKE_TIMEZONE` (default `Europe/Istanbul`).
 

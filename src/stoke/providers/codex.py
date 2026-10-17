@@ -126,6 +126,8 @@ class CodexProvider:
 
     name = "codex"
     label = "Codex"
+    manual_resets = False
+    auth_labels = {"shared": {"label": "ChatGPT login (device code)"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command, rpc: RpcRunner = run_jsonrpc) -> None:
         self.settings = settings

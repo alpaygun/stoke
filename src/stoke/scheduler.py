@@ -6,12 +6,13 @@ import time
 from datetime import datetime, time as local_time, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Mapping, cast
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from . import clock, store
-from .config import Settings
-from .models import Plan, PlanOutcome, PlanRepeat, PlanResult, ResetCredits, StokeRecord, StokeResult, ToolState, Window, validate_plan
-from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, short_error
+from .config import Settings, parse_date
+from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredits, StokeRecord, StokeResult, ToolState, Window, validate_auto_refresh, validate_plan
+from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup", "planned"]
@@ -39,6 +40,10 @@ class PlanUnreachable(ValueError):
 
 class RefreshUnsupported(Exception):
     """A tool has no official no-stoke limit reader."""
+
+
+class ManualResetsUnsupported(Exception):
+    """A tool does not accept manually entered reset credits."""
 
 
 def first_target(time: str, now: int, tz: ZoneInfo) -> int:
@@ -143,6 +148,7 @@ class Scheduler:
         self.path = path if path is not None else settings.data_dir / "state.json"
         self.locks = {name: asyncio.Lock() for name in providers}
         self.events = {name: asyncio.Event() for name in providers}
+        self.refresh_events = {name: asyncio.Event() for name in self.readers}
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.refresh_tasks: dict[str, asyncio.Task[None]] = {}
         self._attempts: set[asyncio.Task[object]] = set()
@@ -228,21 +234,30 @@ class Scheduler:
             try:
                 snapshot = await self.readers[name].read_limits()
             except ProviderError as error:
+                signed_out = isinstance(error, ReaderSignedOut)
+                message = "usage reader signed out" if signed_out else short_error(str(error))
+                state.last_read = ReadRecord(clock.now(), False, message, signed_out)
+                self._persist()
                 logger.warning("tool=%s refresh failed: %s", name, short_error(str(error)))
                 raise
             except Exception as error:
+                state.last_read = ReadRecord(clock.now(), False, "unexpected provider error", False)
+                self._persist()
                 logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
                 raise ProviderError("unexpected provider error") from None
             now = clock.now()
-            if state.five_hour is not None:
-                state.five_hour = Window(
-                    snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
-                )
-            if snapshot.weekly is not None:
-                state.weekly = snapshot.weekly
-            state.limits_at = now
-            if snapshot.resets is not None:
-                state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
+            state.last_read = ReadRecord(now, True, None, False)
+            observed = min(snapshot.observed_at, now) if snapshot.observed_at is not None else now
+            if state.limits_at is None or observed >= state.limits_at:
+                if state.five_hour is not None:
+                    state.five_hour = Window(
+                        snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
+                    )
+                if snapshot.weekly is not None:
+                    state.weekly = snapshot.weekly
+                state.limits_at = observed
+                if snapshot.resets is not None:
+                    state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
             self._persist()
             return state
         finally:
@@ -251,18 +266,80 @@ class Scheduler:
                 self._attempts.discard(task)
 
     async def _refresh_loop(self, name: str) -> None:
-        """Read at startup and each interval, surviving failures and overlap."""
+        """Wait while disabled; wake on settings changes and back off failures."""
+        event = self.refresh_events[name]
+        state = self.states[name]
+        failures = 0
         while True:
-            delay = self.settings.refresh_seconds
+            event.clear()
+            if not state.auto_refresh.enabled:
+                await event.wait()
+                continue
+            seconds = state.auto_refresh.seconds
+            delay = seconds
             try:
                 await self.refresh_limits(name)
+                failures = 0
             except AlreadyRunning:
                 delay = REFRESH_BUSY_RETRY_SECONDS
             except ProviderError:
-                pass
+                failures += 1
+                delay = min(seconds * 2 ** min(failures, 12), 3600)
             except Exception as error:
                 logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
-            await asyncio.sleep(delay)
+                failures += 1
+                delay = min(seconds * 2 ** min(failures, 12), 3600)
+            if event.is_set():
+                continue
+            try:
+                await asyncio.wait_for(event.wait(), delay)
+            except TimeoutError:
+                pass
+
+    def set_auto_refresh(self, name: str, enabled: bool, seconds: int) -> ToolState:
+        """Persist per-tool reading preferences and restart its timer."""
+        if name not in self.readers:
+            raise RefreshUnsupported(name)
+        validate_auto_refresh(enabled, seconds)
+        state = self.states[name]
+        state.auto_refresh = AutoRefresh(enabled, seconds)
+        self._persist()
+        self.refresh_events[name].set()
+        return state
+
+    def _manual_state(self, name: str) -> ToolState:
+        if not self.providers[name].manual_resets:
+            raise ManualResetsUnsupported(name)
+        return self.states[name]
+
+    def add_manual_reset(self, name: str, title: str, expires_on: str) -> ToolState:
+        """Record a user-supplied credit through 23:59 of its local date."""
+        state = self._manual_state(name)
+        if not isinstance(title, str) or title not in MANUAL_RESET_TITLES:
+            raise ValueError("title must be Full reset or 5-hour reset")
+        expires_at = int(datetime.combine(
+            parse_date(expires_on, "expires_on"), local_time(23, 59), self.settings.timezone,
+        ).timestamp())
+        now = clock.now()
+        if expires_at <= now:
+            raise ValueError("expiry must be in the future")
+        entries = [entry for entry in state.manual_resets if entry.expires_at > now]
+        if len(entries) >= 10:
+            raise ValueError("at most 10 manual resets are allowed")
+        entries.append(ManualReset(uuid4().hex[:12], title, expires_at, now))
+        state.manual_resets = sorted(entries, key=lambda entry: entry.expires_at)
+        self._persist()
+        return state
+
+    def remove_manual_reset(self, name: str, id: str) -> ToolState:
+        """Remove a credit without spending it, also pruning expired entries."""
+        state = self._manual_state(name)
+        if not isinstance(id, str) or not any(entry.id == id for entry in state.manual_resets):
+            raise ValueError("manual reset id not found")
+        now = clock.now()
+        state.manual_resets = [entry for entry in state.manual_resets if entry.id != id and entry.expires_at > now]
+        self._persist()
+        return state
 
     def set_auto(self, name: str, enabled: bool) -> ToolState:
         """Persist the switch and immediately wake the tool's waiting loop."""
