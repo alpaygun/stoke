@@ -1,6 +1,6 @@
 """Enabled tool registry; dry run replaces every real provider."""
 
-from typing import Callable
+from typing import Protocol
 
 from ..config import Settings
 from ..runner import Runner, run_command
@@ -9,7 +9,17 @@ from .claude import ClaudeProvider
 from .codex import CodexProvider
 from .dryrun import DryRunProvider, DryRunReader
 
-FACTORIES: dict[str, tuple[str, Callable[[Settings, Runner], Provider]]] = {
+
+class ProviderFactory(Protocol):
+    """A provider constructor with capabilities available before instantiation."""
+
+    manual_resets: bool
+    auth_labels: dict[str, dict[str, str]]
+
+    def __call__(self, settings: Settings, runner: Runner) -> Provider: ...
+
+
+FACTORIES: dict[str, tuple[str, ProviderFactory]] = {
     "claude": ("Claude", ClaudeProvider),
     "codex": ("Codex", CodexProvider),
 }
@@ -22,6 +32,7 @@ def create_providers(settings: Settings, runner: Runner = run_command) -> dict[s
         label, factory = FACTORIES[name]
         dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
         providers[name] = (
-            dry_factory(name, label, settings) if settings.dry_run else factory(settings, runner)
+            dry_factory(name, label, settings, manual_resets=factory.manual_resets, auth_labels=factory.auth_labels)
+            if settings.dry_run else factory(settings, runner)
         )
     return providers

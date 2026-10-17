@@ -7,6 +7,8 @@ from typing import Any, Callable
 import pytest
 
 from stoke.config import Settings, load_settings
+from stoke.providers.claude import ClaudeProvider
+from stoke.providers.codex import CodexProvider
 from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window
 
 
@@ -15,6 +17,9 @@ class FakeProvider:
 
     def __init__(self, name: str = "claude", result: StokeResult | Exception | None = None) -> None:
         self.name = name
+        real = ClaudeProvider if name == "claude" else CodexProvider
+        self.manual_resets = real.manual_resets
+        self.auth_labels = real.auth_labels
         self.label = {"claude": "Claude", "codex": "Codex"}[name]
         self.result = result if result is not None else StokeResult(Window(2.0, 19000, 300), None, 12)
         self.calls = 0

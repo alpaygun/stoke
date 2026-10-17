@@ -24,7 +24,7 @@ class Runner(Protocol):
 
     async def __call__(
         self, argv: Sequence[str], cwd: Path, timeout_s: float,
-        env: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None, *, stdin: bytes | None = None,
     ) -> CommandResult: ...
 
 
@@ -122,15 +122,16 @@ async def run_jsonrpc(
 
 async def run_command(
     argv: Sequence[str], cwd: Path, timeout_s: float,
-    env: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None, *, stdin: bytes | None = None,
 ) -> CommandResult:
     """Capture a command, killing and reaping it on timeout or cancellation."""
     started = time.perf_counter()
     process = await asyncio.create_subprocess_exec(
         *argv, cwd=cwd, env=None if env is None else dict(env),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        **({"stdin": asyncio.subprocess.PIPE} if stdin is not None else {}),
     )
-    output = asyncio.create_task(process.communicate())
+    output = asyncio.create_task(process.communicate(input=stdin) if stdin is not None else process.communicate())
     timed_out = False
     try:
         stdout, stderr = await asyncio.wait_for(asyncio.shield(output), timeout_s)

@@ -18,11 +18,13 @@ class FakeProcess:
         self.killed = False
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.input: bytes | None = None
         if not blocked:
             self.release.set()
 
-    async def communicate(self) -> tuple[bytes, bytes]:
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
         """Return deterministic output once released."""
+        self.input = input
         self.started.set()
         await self.release.wait()
         return b"stdout\xff", b"stderr"
@@ -51,29 +53,44 @@ def test_runner_uses_exec_captures_and_passes_environment(monkeypatch: pytest.Mo
     assert not process.killed
 
 
-def test_runner_kills_and_reaps_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("stdin", [b"request\n", b""])
+def test_runner_stdin_is_piped_and_passed_exactly(stdin: bytes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    process = FakeProcess()
+    async def create(*argv: str, **kwargs: Any) -> FakeProcess:
+        assert kwargs["stdin"] == asyncio.subprocess.PIPE
+        return process
+    monkeypatch.setattr("asyncio.create_subprocess_exec", create)
+    asyncio.run(run_command(["fixed"], tmp_path, 10, stdin=stdin))
+    assert process.input == stdin
+
+
+@pytest.mark.parametrize("stdin", [None, b"control\n"])
+def test_runner_kills_and_reaps_timeout(stdin: bytes | None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     process = FakeProcess(blocked=True)
     async def create(*argv: str, **kwargs: Any) -> FakeProcess:
         assert kwargs["env"] is None
         return process
     monkeypatch.setattr("asyncio.create_subprocess_exec", create)
-    result = asyncio.run(run_command(["fixed"], tmp_path, 0))
+    result = asyncio.run(run_command(["fixed"], tmp_path, 0, stdin=stdin))
     assert result.timed_out and result.returncode == -9 and process.killed
     assert result.stdout == "stdout\ufffd"
+    assert process.input == stdin
 
 
-def test_runner_kills_and_reaps_on_cancellation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("stdin", [None, b"control\n"])
+def test_runner_kills_and_reaps_on_cancellation(stdin: bytes | None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     async def scenario() -> None:
         process = FakeProcess(blocked=True)
         async def create(*argv: str, **kwargs: Any) -> FakeProcess:
             return process
         monkeypatch.setattr("asyncio.create_subprocess_exec", create)
-        task = asyncio.create_task(run_command(["fixed"], tmp_path, 10))
+        task = asyncio.create_task(run_command(["fixed"], tmp_path, 10, stdin=stdin))
         await process.started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert process.killed and process.returncode == -9
+        assert process.input == stdin
     asyncio.run(scenario())
 
 

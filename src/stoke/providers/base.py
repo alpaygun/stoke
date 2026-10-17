@@ -31,11 +31,17 @@ class LimitsUnreadable(ProviderError):
     """The CLI succeeded but its limit data could not be read."""
 
 
+class ReaderSignedOut(ProviderError):
+    """The separate browser login used for usage reads is no longer valid."""
+
+
 class Provider(Protocol):
     """One tool's fixed stoke operation."""
 
     name: str
     label: str
+    manual_resets: bool
+    auth_labels: dict[str, dict[str, str]]
 
     async def stoke(self) -> StokeResult: ...
 

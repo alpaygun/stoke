@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && chown -R stoke:stoke /data /home/stoke
 COPY src ./src
 COPY static ./static
+COPY --chmod=0755 scripts/stoke-login /usr/local/bin/stoke-login
 
 ENV HOME=/home/stoke \
     CODEX_HOME=/home/stoke/.codex \

@@ -4,12 +4,13 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool, validate_plan
+from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool, validate_auto_refresh, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,39 @@ def _plan_outcome(value: Any) -> PlanOutcome | None:
     return PlanOutcome(_int(value["target_at"]), value["result"], _int(value["at"]))
 
 
+def _auto_refresh(value: Any) -> AutoRefresh:
+    if not isinstance(value, dict):
+        raise ValueError("invalid auto refresh")
+    enabled, seconds = value.get("enabled", False), value.get("seconds", 300)
+    validate_auto_refresh(enabled, seconds)
+    return AutoRefresh(enabled, seconds)
+
+
+def _read_record(value: Any) -> ReadRecord | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("invalid read record")
+    error = value.get("error")
+    if error is not None and not isinstance(error, str):
+        raise ValueError("invalid error")
+    return ReadRecord(_int(value.get("at")), _bool(value.get("ok")),
+                      None if error is None else short_error(error), _bool(value.get("signed_out")))
+
+
+def _manual_resets(value: Any) -> list[ManualReset]:
+    if not isinstance(value, list) or len(value) > 10:
+        raise ValueError("invalid manual resets")
+    entries = []
+    for entry in value:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str)
+                or re.fullmatch(r"[0-9a-f]{12}", entry["id"]) is None
+                or not isinstance(entry.get("title"), str) or entry["title"] not in MANUAL_RESET_TITLES):
+            raise ValueError("invalid manual reset")
+        entries.append(ManualReset(entry["id"], entry["title"], _int(entry.get("expires_at")), _int(entry.get("added_at"))))
+    return sorted(entries, key=lambda entry: entry.expires_at)
+
+
 def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[str, ToolState]:
     """Load enabled tools, falling back to defaults for missing or corrupt data."""
     defaults = {
@@ -124,6 +158,9 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 _resets(item.get("resets")),
                 plan=_plan(item.get("plan")),
                 plan_outcome=_plan_outcome(item.get("plan_outcome")),
+                auto_refresh=_auto_refresh(item.get("auto_refresh", {})),
+                last_read=_read_record(item.get("last_read")),
+                manual_resets=_manual_resets(item.get("manual_resets", [])),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
