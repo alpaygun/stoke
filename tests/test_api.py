@@ -50,7 +50,7 @@ def test_state_shape_manual_result_health_and_page(
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None,
             "manual_resets": [], "manual_resets_allowed": True, "weekly_resets": [],
-            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Browser login on the Pi"}},
+            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Browser login"}},
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}
