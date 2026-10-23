@@ -324,10 +324,10 @@
       ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
       ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']],
-      ['read_signed_out', ['Usage reading signed out', 'The browser login on the Pi that reads usage has expired. Stoking is not affected. Sign in again from your PC:']],
+      ['read_signed_out', ['Usage reading signed out', 'The browser login that reads usage has expired. Stoking is not affected. Sign in again from the stoke folder on the server:']],
       ['token_expiring', ['Stoke token expires soon', '']]
     ]);
-    const LOGIN_COMMAND = 'ssh -t 1 "cd ~/Documents/Projects/stoke && docker compose exec stoke stoke-login claude"';
+    const LOGIN_COMMAND = 'docker compose exec stoke stoke-login claude';
     const dialogOpen = () => !!document.querySelector('dialog[open]');
     let state = null;
     let clockOffset = 0;
@@ -414,7 +414,7 @@
       if (tool.warning === 'token_expiring') {
         const left = tool.auth.stoke.expires_at - current;
         warning = [left <= 0 ? 'Stoke token expired' : 'Stoke token expires soon',
-          `The 1-year token that stokes Claude ${left <= 0 ? 'has expired; stoking has stopped.' : `expires in ${Math.ceil(left / 86400)} days; after that, stoking stops.`} Create a new one with claude setup-token and put it in the Pi's .env.`];
+          `The 1-year token that stokes Claude ${left <= 0 ? 'has expired; stoking has stopped.' : `expires in ${Math.ceil(left / 86400)} days; after that, stoking stops.`} Create a new one with claude setup-token, put it in .env and restart stoke.`];
       }
       const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '—';
       const lastAgo = last ? `${span(current - last.at)} ago` : '';
@@ -1228,7 +1228,7 @@
       const current = now();
       const vm = Object.values(state?.tools ?? {}).map(tool => view(tool, current));
       const tools = new Map(vm.map(tool => [tool.name, tool]));
-      const clockText = `Raspberry Pi · synced ${clock(current)}`;
+      const clockText = `synced ${clock(current)}`;
       app.querySelectorAll('[data-live]').forEach(element => {
         const field = element.dataset.live, tool = tools.get(element.dataset.tool);
         if (field === 'arc') {

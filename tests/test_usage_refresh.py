@@ -458,7 +458,7 @@ def test_live_warning_priority_expiry_boundary_and_auth(delta: int, warning: str
     def live() -> dict[str, Any]:
         return serialize_tool(state, 1000, settings=settings, manual_resets_allowed=True, auth_labels=ClaudeProvider.auth_labels)
     assert live()["warning"] == warning and state.warning is None
-    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Browser login on the Pi"}}
+    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Browser login"}}
     assert live()["manual_resets_allowed"]
     state.last_read = ReadRecord(900, False, "usage reader signed out", True)
     assert live()["warning"] == "read_signed_out" and state.warning is None
