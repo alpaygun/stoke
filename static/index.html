@@ -19,6 +19,7 @@
     .wrap { max-width: var(--page-width); margin: 0 auto; display: flex; flex-direction: column; gap: var(--page-gap); }
     .header, .header-tools, .brand, .card-heading, .tool-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
     .header, .card-heading { justify-content: space-between; }
+    .card-heading { flex-wrap: nowrap; }
     .brand { min-width: 0; }
     .header-tools { justify-content: flex-end; }
     .gap-line { display: flex; align-items: baseline; flex-wrap: wrap; }
@@ -189,11 +190,21 @@
     .note-line .note-dismiss { flex: none; width: 44px; height: 44px; font-size: 22px; }
     .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #FF8A7A; vertical-align: middle; }
     .dot.caution { background: #F5A142; }
-    .heading-tools { display: flex; align-items: center; gap: 4px; }
+    .heading-tools { display: flex; align-items: center; gap: 4px; flex: none; }
     .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #8A939D; }
     .icon-button:hover, .icon-button:focus-visible { color: #F5A142; }
     .icon-button .dot { position: absolute; top: 10px; right: 10px; margin: 0; }
-    .heading-tools .toggle { margin-left: 10px; }
+    .more-menu { position: relative; display: flex; flex: none; }
+    .more-menu > summary { list-style: none; cursor: pointer; }
+    .more-menu > summary::-webkit-details-marker { display: none; }
+    .more-menu > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    .more-menu[open] > summary { color: #F5A142; }
+    .menu-pop { top: calc(100% + 8px); right: 0; width: min(240px, calc(100vw - 48px)); padding: 6px; display: flex; flex-direction: column; }
+    .menu-pop .toggle { width: 100%; justify-content: space-between; padding: 0 10px; }
+    .menu-separator { height: 1px; margin: 4px 10px; background: #252A30; }
+    .menu-item { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; font: inherit; font-size: 14px; color: #C3C9D0; text-align: left; cursor: pointer; }
+    .menu-item svg { flex: none; color: #8A939D; }
+    .menu-item:hover, .menu-item:focus-visible { background: #1B1F24; }
 
     @media (max-width: 931px) {
       .reset-pop { position: static; width: auto; margin-top: 12px; padding: 0; border: 0; box-shadow: none; background: transparent; }
@@ -957,13 +968,7 @@
       line.append(el('span', 'note-icon', '↺'), text, dismiss);
       return line;
     }
-    function iconButton(tool, kind) {
-      const button = el('button', 'icon-button');
-      button.setAttribute('type', 'button');
-      button.setAttribute('data-key', `${tool.name}:${kind}`);
-      const label = kind === 'settings' ? 'Settings' : 'Info';
-      button.setAttribute('aria-label', `${tool.label} ${label}`);
-      button.setAttribute('title', label);
+    function menuIcon(kind) {
       const image = svg('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
       if (kind === 'settings') {
         ['M4 7h9', 'M17 7h3', 'M4 17h3', 'M11 17h9'].forEach(d => image.append(svg('path', { d })));
@@ -971,10 +976,36 @@
       } else {
         image.append(svg('circle', { cx: 12, cy: 12, r: 9 }), svg('path', { d: 'M12 11v5' }), svg('path', { d: 'M12 8h.01' }));
       }
-      button.append(image);
-      if (kind === 'info' && tool.hasWarning) button.append(dot(tool));
-      button.addEventListener('click', () => kind === 'settings' ? openSettings(tool.name) : openInfo(tool.name));
-      return button;
+      return image;
+    }
+    function moreMenu(tool) {
+      const box = popover(tool, 'menu', 'more-menu'), summary = el('summary', 'icon-button');
+      summary.setAttribute('data-key', `${tool.name}:menu`);
+      summary.setAttribute('aria-label', `${tool.label} menu`);
+      summary.setAttribute('title', 'Menu');
+      const image = svg('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'currentColor', stroke: 'none', 'aria-hidden': 'true' });
+      [5, 12, 19].forEach(cx => image.append(svg('circle', { cx, cy: 12, r: 1.6 })));
+      summary.append(image);
+      if (tool.hasWarning) summary.append(dot(tool));
+      const pop = el('div', 'popover-surface menu-pop'), separator = el('div', 'menu-separator');
+      separator.setAttribute('aria-hidden', 'true');
+      pop.append(autoControl(tool), separator);
+      ['settings', 'info'].forEach(kind => {
+        const button = el('button', 'menu-item'), label = kind === 'settings' ? 'Settings' : 'Info';
+        button.setAttribute('type', 'button');
+        button.setAttribute('data-key', `${tool.name}:${kind}`);
+        button.append(menuIcon(kind), el('span', '', label));
+        if (kind === 'info' && tool.hasWarning) button.append(dot(tool));
+        button.addEventListener('click', () => {
+          closePopover(box);
+          summary.focus({ preventScroll: true });
+          if (kind === 'settings') openSettings(tool.name);
+          else openInfo(tool.name);
+        });
+        pop.append(button);
+      });
+      box.append(summary, pop);
+      return box;
     }
     const settingsDialog = document.querySelector('#settings-dialog');
     const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value'), arUnit = document.querySelector('#ar-unit');
@@ -1255,7 +1286,7 @@
         if (tool.hasWarning) card.append(warnLine(tool));
         const heading = el('div', 'card-heading');
         const tools = el('div', 'heading-tools');
-        tools.append(iconButton(tool, 'settings'), iconButton(tool, 'info'), autoControl(tool));
+        tools.append(moreMenu(tool));
         heading.append(toolTitle(tool), tools);
         const body = el('div', 'dial-body'), dial = el('div', 'dial');
         const ring = live(svg('svg', { width: 200, height: 200, viewBox: '0 0 200 200', role: 'img', 'aria-label': tool.dialLabel }), 'dialLabel', tool);
