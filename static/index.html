@@ -3,16 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color">
   <title>Stoke</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
   <style>
+    :root {
+      --page-padding: 32px 16px 48px;
+      --page-width: 1120px;
+      --page-gap: 24px;
+      --font: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', ui-monospace, monospace;
+      --radius: 24px;
+      --radius-sm: 999px;
+      --radius-tile: 16px;
+      --radius-box: 10px;
+      --radius-field: 8px;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #11111B;
+      --surface: #1E1E2E;
+      --surface-2: #181825;
+      --line: #313244;
+      --line-strong: #45475A;
+      --text: #CDD6F4;
+      --text-2: #BAC2DE;
+      --text-3: #A6ADC8;
+      --text-4: #7F849C;
+      --track: #313244;
+      --weekly: #B4BEFE;
+      --shadow: none;
+      --accent: #FAB387;
+      --accent-ink: #FAB387;
+      --accent-soft: rgba(250,179,135,.14);
+      --on-accent: #11111B;
+      --danger-ink: #F38BA8;
+      --danger-soft: #2A1714;
+      --danger-line: #7A2A22;
+      --danger-text: #FFD9D3;
+      --ok: #A6E3A1;
+      --ok-soft: rgba(166,227,161,.10);
+      --ok-line: rgba(166,227,161,.28);
+      --ok-text: #CDEFD0;
+      --caution-soft: rgba(250,179,135,.10);
+      --caution-line: rgba(250,179,135,.35);
+      --caution-text: #F5E0DC;
+      --switch-track: #45475A;
+      --switch-thumb: #BAC2DE;
+      --focus: #FAB387;
+      --backdrop: rgba(17,17,27,.7);
+      --popover-shadow-colour: rgba(17,17,27,.55);
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #DCE0E8;
+      --surface: #EFF1F5;
+      --surface-2: #E6E9EF;
+      --line: #CCD0DA;
+      --line-strong: #BCC0CC;
+      --text: #4C4F69;
+      --text-2: #5C5F77;
+      --text-3: #6C6F85;
+      --text-4: #8C8FA1;
+      --track: #CCD0DA;
+      --weekly: #7287FD;
+      --shadow: 0 10px 30px rgba(76,79,105,.08);
+      --accent: #FE640B;
+      --accent-ink: #C2410C;
+      --accent-soft: rgba(254,100,11,.12);
+      --on-accent: #FFFFFF;
+      --danger-ink: #D20F39;
+      --danger-soft: #FEF2F2;
+      --danger-line: #FECACA;
+      --danger-text: #7F1D1D;
+      --ok: #40A02B;
+      --ok-soft: #E6F4E4;
+      --ok-line: #B9DDB2;
+      --ok-text: #2D5F25;
+      --caution-soft: rgba(254,100,11,.10);
+      --caution-line: rgba(254,100,11,.35);
+      --caution-text: #C2410C;
+      --switch-track: #BCC0CC;
+      --switch-thumb: #5C5F77;
+      --focus: #C2410C;
+      --backdrop: rgba(76,79,105,.4);
+      --popover-shadow-colour: rgba(76,79,105,.20);
+    }
     * { box-sizing: border-box; }
     body { margin: 0; }
     button, input, select { font: inherit; }
     button, label { -webkit-tap-highlight-color: transparent; }
     button { cursor: pointer; }
     button:disabled, input:disabled { cursor: default; }
-    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
     h1, h2, p, dl, dd { margin: 0; }
     [hidden] { display: none !important; }
     .page { min-height: 100vh; padding: var(--page-padding); }
@@ -22,20 +105,20 @@
     .card-heading { flex-wrap: nowrap; }
     .brand { min-width: 0; }
     .header-tools { justify-content: flex-end; }
-    .gap-line { display: flex; align-items: baseline; flex-wrap: wrap; }
+    .gap-line { display: flex; align-items: center; flex-wrap: wrap; }
     .gap-button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; cursor: pointer; }
-    .gap-button.ok { color: #7FD39A; }
-    .gap-button:hover, .gap-button:focus-visible { color: #F5A142; text-decoration: underline; }
+    .gap-button.ok { color: var(--ok); }
+    .gap-button:hover, .gap-button:focus-visible { color: var(--accent-ink); text-decoration: underline; }
     .gap-sep { white-space: pre; }
     .mono { font-family: var(--mono); }
-    .muted { color: var(--muted); }
+    .muted { color: var(--text-3); }
     .small { font-size: 13px; line-height: 1.5; }
     .dry-run { font-family: var(--mono); font-size: 12px; font-weight: 600; border-radius: 6px; padding: 4px 8px; }
-    .cards { display: flex; flex-wrap: wrap; gap: 20px; }
-    .card { flex: 1 1 440px; min-width: 0; display: flex; flex-direction: column; }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    .card { min-width: 0; display: grid; grid-template-rows: subgrid; grid-row: span 4; }
     .tool-title { gap: 10px; min-width: 0; }
     .tool-title h2, .warning, dd, .last-result, #error { overflow-wrap: anywhere; }
-    .chip { flex: none; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
+    .chip { flex: none; border-radius: var(--radius-sm); padding: 5px 12px; font-size: 12px; font-weight: 600; }
     .toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
     .toggle input { flex: none; margin: 0; cursor: pointer; }
     .switch { appearance: none; -webkit-appearance: none; position: relative; transition: background .15s; }
@@ -43,183 +126,238 @@
     .switch:checked::after { transform: translateX(20px); }
     .toggle input:disabled { cursor: default; }
     .stoke { min-height: 44px; font-weight: 600; }
-    .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .stat { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
     .warning, #error { font-size: 14px; line-height: 1.45; }
-    #error { border: 1px solid var(--error-border); background: var(--error-bg); color: var(--error-fg); padding: 12px 14px; border-radius: 10px; }
-    .track { overflow: hidden; background: var(--track); border-radius: 3px; }
-    .fill { height: 100%; background: var(--accent); }
+    #error { border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); padding: 12px 14px; border-radius: var(--radius-box); }
+    .track { overflow: hidden; background: var(--track); border-radius: var(--radius-sm); }
+    .fill { height: 100%; border-radius: var(--radius-sm); background: var(--accent); }
 
-    /* Dial */
-    :root {
-      --page-padding: 32px 16px 48px; --page-width: 1120px; --page-gap: 24px;
-      --mono: 'IBM Plex Mono', ui-monospace, monospace; --muted: #9AA3AD;
-      --track: #252A30; --accent: #F5A142; --focus: #F5A142;
-      --error-bg: #3A1714; --error-border: #7A2A22; --error-fg: #FFD9D3;
-      background: #0E1013; color: #E6E8EB; font-family: 'IBM Plex Sans', system-ui, sans-serif; color-scheme: dark;
-    }
-    .brand h1 { font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: .04em; }
-    .dry-run { background: #F5A142; color: #1A1206; letter-spacing: .06em; }
-    .card { gap: 22px; padding: 24px; border: 1px solid #252A30; border-radius: 16px; background: #15181C; }
-    .tool-title h2 { font-size: 22px; font-weight: 600; }
-    .chip { font-family: var(--mono); font-weight: 500; background: #3A2A12; color: #F5A142; }
-    .chip.closed { background: #23272D; color: #AEB5BD; }
-    .chip.running { color: #FFC27A; }
-    .toggle { font-size: 14px; color: #C3C9D0; }
-    .switch { width: 44px; height: 24px; border-radius: 12px; background: #2C323A; }
-    .switch::after { width: 18px; height: 18px; background: #C9CED4; }
-    .switch:checked { background: #F5A142; }
-    .switch:checked::after { background: #1A1206; }
-    .dial-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 28px; }
+    .brand h1 { font-family: var(--font); font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+    .dry-run { background: var(--accent-soft); color: var(--accent-ink); letter-spacing: .06em; }
+    .card { gap: 24px; padding: 26px; border: 1px solid transparent; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+    .tool-title h2 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+    .chip { font-family: var(--font); font-weight: 500; background: var(--accent-soft); color: var(--accent-ink); }
+    .chip.closed { background: var(--surface-2); color: var(--text-3); }
+    .chip.running { color: var(--accent-ink); }
+    .toggle { font-size: 14px; color: var(--text-2); }
+    .switch { width: 44px; height: 24px; border-radius: 12px; background: var(--switch-track); }
+    .switch::after { width: 18px; height: 18px; background: var(--switch-thumb); }
+    .switch:checked { background: var(--accent); }
+    .switch:checked::after { background: var(--on-accent); }
+    .dial-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 32px; }
     .dial { position: relative; width: 200px; height: 200px; flex: none; }
     .dial-center { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; text-align: center; }
-    .remaining { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -.01em; }
-    .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
-    .usage { display: flex; flex-direction: column; gap: 6px; }
-    .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 13px; }
-    .track { height: 4px; }
-    .weekly-fill { background: #C9CED4; }
-    .weekly-reset { color: #8A939D; font-size: 12px; }
-    .stats { gap: 16px; border-top: 1px solid #252A30; padding-top: 18px; }
-    .card > .stats { margin-top: auto; }
-    .stat { position: relative; gap: 4px; }
-    dt { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
-    .stat-head { display: flex; align-items: center; gap: 6px; min-height: 16px; }
-    .stat-value { font-family: var(--mono); font-size: 16px; }
+    .remaining { font-family: var(--mono); font-size: 32px; font-weight: 600; letter-spacing: -.01em; }
+    .dial-details { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 20px; padding-top: 4px; }
+    .usage { display: flex; flex-direction: column; gap: 8px; }
+    .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 14px; }
+    .track { height: 8px; }
+    .weekly-fill { background: var(--weekly); }
+    .weekly-reset { color: var(--text-3); font-size: 12.5px; line-height: 1.7; }
+    .track + .weekly-reset { margin-top: 8px; }
+    .stats { gap: 12px; }
+    .stat { position: relative; gap: 4px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--surface-2); }
+    .stat-head { display: flex; align-items: center; gap: 6px; min-height: 16px; font-size: 13px; color: var(--text-3); }
+    .stat-value { font-family: var(--mono); font-size: 18px; }
     .info { display: flex; }
-    .info > summary { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #2E343B; color: #6B737C; font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; text-transform: none; font-family: var(--mono); cursor: pointer; list-style: none; }
+    .info > summary { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line-strong); color: var(--text-4); font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; text-transform: none; font-family: var(--mono); cursor: pointer; list-style: none; }
     .info > summary::after { content: ""; position: absolute; inset: -9px; }
     .info > summary::-webkit-details-marker { display: none; }
-    .info > summary:hover, .info > summary:focus-visible, .info[open] > summary { border-color: #F5A142; color: #F5A142; }
+    .info > summary:hover, .info > summary:focus-visible, .info[open] > summary { border-color: var(--accent-ink); color: var(--accent-ink); }
     .info > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-    .info-pop { top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 48px)); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; color: #E6E8EB; }
+    .info-pop { top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 48px)); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 400; letter-spacing: normal; text-transform: none; color: var(--text); }
     .info-row { display: flex; justify-content: space-between; gap: 12px; }
     .info-row > :first-child { flex: none; }
     .info-row > :last-child { min-width: 0; overflow-wrap: anywhere; text-align: right; }
     .last-result { font-size: 13px; }
-    .failed { color: #FF8A7A; }
-    .stoke { border: 1px solid #F5A142; border-radius: 10px; background: transparent; color: #F5A142; font-family: var(--mono); font-size: 14px; letter-spacing: .04em; }
-    .stoke:hover:not(:disabled) { background: #F5A142; color: #1A1206; }
-    .stoke:disabled { color: #C98A42; border-color: #926B42; }
-    .warning { display: flex; align-items: flex-start; gap: 10px; background: #3A1714; border: 1px solid #7A2A22; color: #FFD9D3; border-radius: 10px; padding: 12px 14px; }
+    .failed { color: var(--danger-ink); }
+    .stoke { border: 0; border-radius: var(--radius-sm); background: var(--accent); color: var(--on-accent); font-family: var(--font); font-size: 14px; font-weight: 700; }
+    .stoke:hover:not(:disabled) { filter: brightness(1.06); }
+    .stoke:disabled { opacity: .55; }
+    .warning { display: flex; align-items: flex-start; gap: 10px; background: var(--danger-soft); border: 1px solid var(--danger-line); color: var(--danger-text); border-radius: var(--radius-box); padding: 12px 14px; }
     .warning svg { flex: none; margin-top: 1px; }
     .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .actions .stoke { grid-column: 1 / -1; }
-    .refresh { min-height: 44px; padding: 4px 10px; white-space: nowrap; border: 1px solid #2C323A; border-radius: 8px; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
-    .refresh:hover:not(:disabled) { border-color: #F5A142; color: #F5A142; }
-    .refresh:disabled { color: #6B737C; }
-    .resets { position: relative; display: flex; flex-direction: column; gap: 0; }
-    .resets-placeholder { visibility: hidden; }
-    .resets-head { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; cursor: pointer; list-style: none; border-radius: 6px; }
+    .refresh { min-height: 44px; padding: 4px 10px; white-space: nowrap; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-family: var(--font); font-size: 14px; font-weight: 600; }
+    .refresh:hover:not(:disabled) { border-color: var(--accent-ink); color: var(--accent-ink); }
+    .refresh:disabled { color: var(--text-4); }
+    .resets { position: relative; }
+    .resets-head { display: flex; flex-direction: column; gap: 4px; height: 100%; cursor: pointer; list-style: none; border-radius: var(--radius-tile); }
     .resets-head::-webkit-details-marker { display: none; }
-    .resets-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-    .resets-head:hover .resets-title { color: #C3C9D0; }
-    .resets-count { display: flex; align-items: baseline; gap: 10px; }
-    .resets-title { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
-    .chevron { display: inline-block; width: 10px; color: #8A939D; font-family: var(--mono); transition: transform .15s; }
-    .resets[open] .chevron { transform: rotate(90deg); }
-    .soon-text { color: #F5A142; }
-    .popover-surface { position: absolute; z-index: 10; border: 1px solid #2C323A; border-radius: 12px; background: #15181C; box-shadow: 0 16px 40px rgba(0,0,0,.55); }
+    .resets-head:hover .stat-head { color: var(--text-2); }
+    .soon-text { color: var(--accent-ink); }
+    .popover-surface { position: absolute; z-index: 10; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); box-shadow: 0 16px 40px var(--popover-shadow-colour); }
     .reset-pop { top: calc(100% + 10px); right: 0; width: min(420px, calc(100vw - 48px)); padding: 14px; }
     .reset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-    .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
+    .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
     .reset-item .mono { font-size: 13px; }
-    .reset-item.soon { background: #2B2113; box-shadow: inset 3px 0 0 #F5A142; }
-    .reset-item.soon .reset-when { color: #F5A142; }
-    .reset-note { font-size: 12px; color: #8A939D; margin-top: 10px; }
-    .plan-row { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
-    .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: #F5A142; font-size: 13px; }
+    .reset-item.soon { background: var(--caution-soft); box-shadow: inset 3px 0 0 var(--accent-ink); }
+    .reset-item.soon .reset-when { color: var(--accent-ink); }
+    .reset-note { font-size: 12px; color: var(--text-3); margin-top: 10px; }
+    .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: var(--accent-ink); font-size: 13px; }
     .text-button:hover:not(:disabled) { text-decoration: underline; }
-    dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid #2C323A; border-radius: 16px; background: #15181C; color: #E6E8EB; }
-    dialog::backdrop { background: rgba(0,0,0,.7); }
+    dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--line-strong); border-radius: var(--radius-tile); background: var(--surface); color: var(--text); }
+    dialog::backdrop { background: var(--backdrop); }
     .plan-form { display: flex; flex-direction: column; gap: 18px; }
     .plan-form h2 { font-size: 22px; }
     .plan-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-    .plan-form legend { margin-bottom: 8px; color: #9AA3AD; font-size: 13px; }
+    .plan-form legend { margin-bottom: 8px; color: var(--text-3); font-size: 13px; }
     .offset-now { font-size: 14px; line-height: 1.6; }
-    .offset-now .ok { color: #7FD39A; }
+    .offset-now .ok { color: var(--ok); }
     .offset-pick { display: flex; flex-direction: column; gap: 18px; }
-    .offset-who { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #2C323A; border-radius: 10px; overflow: hidden; }
-    .offset-who button { min-height: 40px; border: 0; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
-    .offset-who button[aria-pressed="true"] { background: #F5A142; color: #1A1206; font-weight: 600; }
+    .offset-who { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line-strong); border-radius: var(--radius-box); overflow: hidden; }
+    .offset-who button { min-height: 40px; border: 0; background: transparent; color: var(--text-2); font-family: var(--mono); font-size: 14px; }
+    .offset-who button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
     .offset-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-    .opt { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid #2C323A; border-radius: 10px; background: #1B1F24; color: inherit; text-align: left; }
-    .opt:hover:not(:disabled) { border-color: #F5A142; }
+    .opt { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-box); background: var(--surface-2); color: inherit; text-align: left; }
+    .opt:hover:not(:disabled) { border-color: var(--accent-ink); }
     .opt-time { display: block; font-family: var(--mono); font-size: 18px; font-weight: 600; }
-    .opt-idle { display: block; font-size: 13px; color: #9AA3AD; }
-    .opt-action { flex: none; font-family: var(--mono); font-size: 13px; color: #F5A142; }
+    .opt-idle { display: block; font-size: 13px; color: var(--text-3); }
+    .opt-action { flex: none; font-family: var(--mono); font-size: 13px; color: var(--accent-ink); }
     .plan-form label { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
-    .plan-form input { accent-color: #F5A142; }
-    #plan-time { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); }
+    .plan-form input { accent-color: var(--accent); }
+    #plan-time { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); }
     #plan-message, #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
-    #plan-message.failed { color: var(--error-fg); }
+    #plan-message.failed { color: var(--danger-text); }
     .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
     .dialog-actions button { padding: 8px 16px; }
     .dialog-actions .text-button { margin-right: auto; padding-left: 0; padding-right: 0; }
 
-    .reset-item .reset-source { font-size: 12px; color: #8A939D; }
+    .reset-item .reset-source { font-size: 12px; color: var(--text-3); }
     .reset-item .text-button { min-height: 24px; font-size: 12px; }
     .reset-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
-    .status-ok { color: #C3C9D0; }
-    .status-warn { color: #F5A142; }
-    .status-bad { color: #FF8A7A; }
+    .status-ok { color: var(--text-2); }
+    .status-warn { color: var(--accent-ink); }
+    .status-bad { color: var(--danger-ink); }
     .form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-    .field { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); font-size: 14px; }
+    .field { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
     .field.num { width: 96px; }
-    .field:disabled { color: #6B737C; }
+    .field:disabled { color: var(--text-4); }
     .setting-section { display: flex; flex-direction: column; gap: 10px; }
-    .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #8A939D; }
+    .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
     .signin-rows { display: flex; flex-direction: column; gap: 8px; }
-    .signin-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; background: #1B1F24; font-size: 13px; }
-    .signin-row.warn { background: #2B2113; box-shadow: inset 3px 0 0 #F5A142; }
-    .signin-row.bad { background: #2A1714; box-shadow: inset 3px 0 0 #FF8A7A; }
+    .signin-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
+    .signin-row.warn { background: var(--caution-soft); box-shadow: inset 3px 0 0 var(--accent-ink); }
+    .signin-row.bad { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger-ink); }
     .signin-row .row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
     .signin-row .mono { overflow-wrap: anywhere; }
-    .command { display: block; margin-top: 6px; padding: 6px 8px; border: 1px solid #2C323A; border-radius: 6px; background: #0E1013; color: #C3C9D0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
-    .warning.caution { background: #2B2113; border-color: #6B4A1E; color: #FFE2BF; }
+    .command { display: block; margin-top: 6px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--text-2); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+    .warning.caution { background: var(--caution-soft); border-color: var(--caution-line); color: var(--caution-text); }
     .info-body { display: flex; flex-direction: column; gap: 16px; }
-    .warn-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 6px 12px; border: 1px solid #7A2A22; border-radius: 8px; background: #2A1714; color: #FFD9D3; font-size: 13px; text-align: left; }
-    .warn-line.caution { border-color: #6B4A1E; background: #2B2113; color: #FFE2BF; }
+    .warn-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 14px; border: 1px solid var(--danger-line); border-radius: 14px; background: var(--danger-soft); color: var(--danger-text); font-size: 14px; text-align: left; }
+    .warn-line.caution { border-color: var(--caution-line); background: var(--caution-soft); color: var(--caution-text); }
     .warn-line .warn-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .warn-line .more { flex: none; font-family: var(--mono); font-size: 12px; color: #FF8A7A; }
-    .warn-line.caution .more { color: #F5A142; }
-    .note-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 6px 12px; border: 1px solid #1E4D3B; border-radius: 8px; background: #11241C; color: #BDEBD3; font-size: 13px; text-align: left; }
-    .note-line .note-icon { flex: none; color: #4FD1A0; }
+    .warn-line .more { flex: none; font-family: var(--mono); font-size: 12px; color: var(--danger-ink); }
+    .warn-line.caution .more { color: var(--accent-ink); }
+    .note-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 14px; border: 1px solid var(--ok-line); border-radius: 14px; background: var(--ok-soft); color: var(--ok-text); font-size: 14px; text-align: left; }
+    .note-line .note-icon { flex: none; color: var(--ok); }
     .note-line button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; }
     .note-line .note-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; }
-    .note-line .note-dismiss { flex: none; width: 44px; height: 44px; font-size: 22px; }
-    .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #FF8A7A; vertical-align: middle; }
-    .dot.caution { background: #F5A142; }
+    .note-line .note-dismiss { flex: none; width: 36px; height: 36px; font-size: 20px; }
+    .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--danger-ink); vertical-align: middle; }
+    .dot.caution { background: var(--accent-ink); }
     .heading-tools { display: flex; align-items: center; gap: 4px; flex: none; }
-    .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #8A939D; }
-    .icon-button:hover, .icon-button:focus-visible { color: #F5A142; }
+    .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--text-3); }
+    .icon-button:hover, .icon-button:focus-visible { color: var(--accent-ink); }
     .icon-button .dot { position: absolute; top: 10px; right: 10px; margin: 0; }
     .more-menu { position: relative; display: flex; flex: none; }
     .more-menu > summary { list-style: none; cursor: pointer; }
     .more-menu > summary::-webkit-details-marker { display: none; }
     .more-menu > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-    .more-menu[open] > summary { color: #F5A142; }
+    .more-menu[open] > summary { color: var(--accent-ink); }
     .menu-pop { top: calc(100% + 8px); right: 0; width: min(240px, calc(100vw - 48px)); padding: 6px; display: flex; flex-direction: column; }
     .menu-pop .toggle { width: 100%; justify-content: space-between; padding: 0 10px; }
-    .menu-separator { height: 1px; margin: 4px 10px; background: #252A30; }
-    .menu-item { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; font: inherit; font-size: 14px; color: #C3C9D0; text-align: left; cursor: pointer; }
-    .menu-item svg { flex: none; color: #8A939D; }
-    .menu-item:hover, .menu-item:focus-visible { background: #1B1F24; }
+    .menu-separator { height: 1px; margin: 4px 10px; background: var(--line); }
+    .menu-item { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: var(--radius-field); font: inherit; font-size: 14px; color: var(--text-2); text-align: left; cursor: pointer; }
+    .menu-item svg { flex: none; color: var(--text-3); }
+    .menu-item:hover, .menu-item:focus-visible { background: var(--surface-2); }
+
+    html { background: var(--bg); color: var(--text); font-family: var(--font); }
+    body { background: var(--bg); }
+    .header-tools { gap: 14px; }
+    .brand > svg { width: 28px; height: 28px; stroke: var(--accent); flex: none; }
+    .ic { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .menu-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .more-icon { width: 18px; height: 18px; fill: currentColor; stroke: none; }
+    .warning > svg, .warn-line > svg { stroke: var(--danger-ink); flex: none; }
+    .caution > svg { stroke: var(--accent-ink); }
+    .dial svg { width: 200px; height: 200px; }
+    .dial-track { stroke: var(--track); }
+    .dial-arc { stroke: var(--accent); }
+    .alerts { display: flex; flex-direction: column; gap: 8px; }
+    .warn-line b, .note-line b { font-weight: 700; }
+    .note-line { padding: 3px 4px 3px 14px; }
+    .stat-sub { font-size: 13px; color: var(--text-3); }
+    .reset-tile { padding: 0; }
+    .reset-tile > .resets { flex: 1; }
+    .resets-head { padding: 14px 16px; }
+    .next-plan { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--accent-ink); }
+    .next-plan .ic { width: 14px; height: 14px; }
+    .refresh { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+    .refresh .ic { color: var(--text-3); }
+    .meta-row { display: flex; align-items: center; gap: 6px; }
+    .auto-ic { position: relative; display: flex; }
+    .auto-ic > summary { list-style: none; cursor: pointer; display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--accent-ink); }
+    .auto-ic > summary::-webkit-details-marker, .theme-one > summary::-webkit-details-marker { display: none; }
+    .auto-ic > summary:hover, .auto-ic[open] > summary { background: var(--accent-soft); }
+    .auto-ic .ic { width: 14px; height: 14px; }
+    .auto-ic .info-pop { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(260px, calc(100vw - 48px)); padding: 12px 14px; gap: 4px; }
+    .auto-ic .info-pop strong { font-weight: 600; }
+    .theme-one { position: relative; }
+    .theme-one > summary { list-style: none; cursor: pointer; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); }
+    .theme-one .popover-surface { right: 0; top: calc(100% + 8px); width: 180px; padding: 6px; border-radius: 14px; }
+    .theme-one .menu-item[aria-pressed=true] { background: var(--surface-2); color: var(--text); }
+    .theme-one .menu-item svg { color: var(--text-3); }
+    .icon-system path:first-child { fill: currentColor; }
+    .gap-button, .text-button, .status-line, .opt-action { display: inline-flex; align-items: center; gap: 6px; }
+    .status-line { align-items: baseline; }
+    .status-line .ic { align-self: flex-start; }
 
     @media (max-width: 931px) {
-      .reset-pop { position: static; width: auto; margin-top: 12px; padding: 0; border: 0; box-shadow: none; background: transparent; }
-      .resets-placeholder { display: none; }
+      .cards { grid-template-columns: minmax(0, 1fr); }
+      .card { grid-row: auto; grid-template-rows: repeat(4, auto); }
     }
     @media (max-width: 480px) {
-      .header-tools { justify-content: flex-start; }
+      .warn-line .more { display: none; }
+      .header { flex-wrap: nowrap; gap: 10px; }
+      .brand { flex-wrap: nowrap; gap: 6px; }
+      .dry-run { font-size: 10px; padding: 4px; max-width: 76px; }
+      .header-tools { flex-wrap: nowrap; gap: 10px; flex: none; }
+      .gap-line { flex-wrap: nowrap; }
+      .gap-line .gap-sep, .gap-line > p { display: none; }
+      .gap-button { white-space: nowrap; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stats > :nth-child(3) { grid-column: 1 / -1; }
+      .resets-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
+      .resets-head .stat-head { flex: 1 0 auto; }
+      .auto-ic .info-pop { width: min(220px, calc(100vw - 48px)); }
+      .refresh { gap: 6px; font-size: 13px; }
       .card { padding: 20px; }
       .dial-body { justify-content: center; }
       #reset-date { min-width: 0; max-width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .switch, .switch::after, .chevron { transition: none; }
+      .switch, .switch::after { transition: none; }
     }
   </style>
+
+  <script>
+    const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+    let themePreference = 'system';
+    try {
+      const saved = localStorage.getItem('stoke-theme');
+      if (['light', 'system', 'dark'].includes(saved)) themePreference = saved;
+    } catch (_) { /* Storage is optional. */ }
+    function applyTheme() {
+      const scheme = themePreference === 'system' ? (themeMedia.matches ? 'dark' : 'light') : themePreference;
+      document.documentElement.setAttribute('data-theme', scheme);
+      document.querySelector('meta[name="theme-color"]').setAttribute('content',
+        getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
+    }
+    themeMedia.addEventListener('change', () => { if (themePreference === 'system') applyTheme(); });
+    applyTheme();
+  </script>
 </head>
 <body>
   <p id="error" role="alert" hidden></p>
@@ -227,6 +365,7 @@
   <dialog id="plan-dialog" aria-labelledby="plan-title">
     <form id="plan-form" class="plan-form">
       <h2 id="plan-title">Plan a stoke</h2>
+      <p id="plan-outcome" class="small status-warn" hidden></p>
       <fieldset><legend>Tools</legend><div id="plan-tools"></div></fieldset>
       <label for="plan-time">Local time <input id="plan-time" type="time" value="07:00" required></label>
       <fieldset>
@@ -324,7 +463,6 @@
     const busy = new Set();
     const inFlightActions = new Map();
     const expanded = new Set();
-    const resetsObserver = new ResizeObserver(syncResetPlaceholders);
     const RESET_SOON_SECONDS = 3 * 86400;
     const HOURS = 5 * 3600;
     const CIRCUMFERENCE = 2 * Math.PI * 86;
@@ -442,6 +580,7 @@
         auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: tool.warning === 'token_expiring',
         weeklyResets: tool.weekly_resets ?? [],
         autoRefreshText: tool.auto_refresh?.enabled ? `auto-refresh every ${interval(tool.auto_refresh.seconds)}` : '',
+        manualResets: !!tool.manual_resets_allowed, upcomingPlanned: !!tool.upcoming_planned,
         plan: tool.plan, plan_outcome: tool.plan_outcome, quiet_from: tool.quiet_from,
         open, elapsed, remaining,
         windowRange: five ? `${clock(start)} → ${clock(end)}` : '—',
@@ -474,11 +613,26 @@
       Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
       return element;
     }
+    const ICONS = {
+      flame: ['M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1.2-3.6 2.4-4.6.3 1.6 1.1 2.6 2.1 3.1C11 8.8 11 5.8 12 3z'],
+      warning: ['M12 3 2 20h20L12 3z', 'M12 10v4', 'M12 17h.01'],
+      refresh: ['M21 12a9 9 0 0 0-15-6.7L3 8', 'M3 3v5h5', 'M3 12a9 9 0 0 0 15 6.7L21 16', 'M21 21v-5h-5'],
+      clock: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 'M12 6v6l4 2'],
+      plus: ['M12 5v14', 'M5 12h14'],
+      cycle: ['M3 12a9 9 0 0 1 15-6.7L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 0 1-15 6.7L3 16', 'M3 21v-5h5'],
+      undo: ['M3 10a9 9 0 1 1 2.6 8.4', 'M3 4v6h6'],
+      check: ['M5 12l4 4L19 6'],
+      cross: ['M6 6l12 12', 'M6 18 18 6'],
+      gap: ['M3 7h18l-4-4', 'M21 17H3l4 4'],
+      chevron: ['M9 5l7 7-7 7'],
+      light: ['M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'],
+      system: ['M12 3a9 9 0 1 0 0 18V3z', 'M12 3a9 9 0 1 1 0 18'],
+      dark: ['M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z']
+    };
     function icon(kind) {
-      const flame = kind === 'flame';
-      const image = svg('svg', { width: flame ? 28 : 18, height: flame ? 28 : 18, viewBox: '0 0 24 24', fill: 'none', stroke: flame ? '#F5A142' : '#FF8A7A', 'stroke-width': flame ? 1.8 : 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-      const paths = flame ? ['M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1.2-3.6 2.4-4.6.3 1.6 1.1 2.6 2.1 3.1C11 8.8 11 5.8 12 3z'] : ['M12 3 2 20h20L12 3z', 'M12 10v4', 'M12 17h.01'];
-      paths.forEach(d => image.append(svg('path', { d })));
+      // The flame drawing spans y=3..18; shift it so its base sits on the "stoke" baseline.
+      const image = svg('svg', { class: `ic icon-${kind}`, viewBox: kind === 'flame' ? '0 -3 24 24' : '0 0 24 24', 'aria-hidden': 'true' });
+      ICONS[kind].forEach(d => image.append(svg('path', { d })));
       return image;
     }
     function live(element, field, tool) {
@@ -506,7 +660,8 @@
       const clockLine = live(el('p', 'mono muted small'), 'dialClock'), gap = offsetGap(currentState);
       if (gap) {
         const line = el('div', 'gap-line mono muted small');
-        const button = el('button', `gap-button${gap.aligned ? ' ok' : ''}`, `${gap.aligned ? '✓' : '⇄'} Gap ${dur(gap.gap)}`);
+        const button = el('button', `gap-button${gap.aligned ? ' ok' : ''}`, `Gap ${dur(gap.gap)}`);
+        button.prepend(icon(gap.aligned ? 'check' : 'gap'));
         button.setAttribute('type', 'button');
         button.setAttribute('data-key', 'offset-open');
         button.setAttribute('title', 'Offset windows');
@@ -514,14 +669,41 @@
         line.append(button, el('span', 'gap-sep', ' · '), clockLine);
         controls.append(line);
       } else controls.append(clockLine);
+      controls.append(themePicker());
       header.append(brand, controls);
       return header;
+    }
+    function themePicker() {
+      const box = popover({ name: 'theme' }, 'menu', 'theme-one'), summary = el('summary');
+      const label = themePreference.charAt(0).toUpperCase() + themePreference.slice(1);
+      summary.setAttribute('data-key', 'theme:open');
+      summary.setAttribute('aria-label', `Theme: ${label}`);
+      summary.setAttribute('title', `Theme: ${label}`);
+      summary.append(icon(themePreference));
+      const menu = el('div', 'popover-surface');
+      ['light', 'system', 'dark'].forEach(preference => {
+        const button = el('button', 'menu-item');
+        button.setAttribute('type', 'button');
+        button.setAttribute('data-key', `theme:${preference}`);
+        button.setAttribute('aria-pressed', String(preference === themePreference));
+        button.append(icon(preference), el('span', '', preference.charAt(0).toUpperCase() + preference.slice(1)));
+        button.addEventListener('click', () => {
+          themePreference = preference;
+          try { localStorage.setItem('stoke-theme', preference); } catch (_) { /* Storage is optional. */ }
+          applyTheme();
+          closePopover(box);
+          summary.focus({ preventScroll: true });
+          render();
+        });
+        menu.append(button);
+      });
+      box.append(summary, menu);
+      return box;
     }
     function warning(tool) {
       const box = el('div', `warning${tool.caution ? ' caution' : ''}`), copy = el('div');
       box.append(icon('warning'));
       copy.append(el('strong', '', tool.warning), el('br'), el('span', '', tool.warningDetail));
-      if (tool.caution) box.querySelector('svg').setAttribute('stroke', '#F5A142');
       if (tool.warningKey === 'read_signed_out') copy.append(el('code', 'command', LOGIN_COMMAND));
       box.append(copy);
       return box;
@@ -550,7 +732,8 @@
       return button;
     }
     function refreshControl(tool) {
-      const button = el('button', 'refresh', refreshText(tool));
+      const button = el('button', 'refresh');
+      button.append(icon('refresh'), el('span', 'button-label', refreshText(tool)));
       button.setAttribute('type', 'button');
       button.setAttribute('data-key', `${tool.name}:refresh`);
       button.setAttribute('data-tool', tool.name);
@@ -562,7 +745,7 @@
       return button;
     }
     function refreshText(tool) {
-      return tool.refreshable && (tool.refreshing || inFlightActions.get(tool.name) === 'refresh') ? 'Reading…' : '↻ Refresh usage';
+      return tool.refreshable && (tool.refreshing || inFlightActions.get(tool.name) === 'refresh') ? 'Reading…' : 'Refresh usage';
     }
     function popover(tool, kind, className) {
       const box = el('details', `${className} popover`), key = `${tool.name}:${kind}`;
@@ -573,17 +756,15 @@
       });
       return box;
     }
-    function resetCredits(tool, current = now()) {
-      const resets = tool.resets;
-      const box = popover(tool, 'resets', 'resets'), head = el('summary', 'resets-head'), count = el('div', 'resets-count');
+    function resetTile(tool, current = now()) {
+      const resets = tool.resets, item = el('div', 'stat reset-tile');
+      const box = popover(tool, 'resets', 'resets'), head = el('summary', 'resets-head');
       head.setAttribute('data-key', `${tool.name}:resets`);
-      const sorted = [...resets.credits].sort((a, b) => a.expires_at - b.expires_at);
-      const first = sorted[0], soonFirst = first && first.expires_at - current < RESET_SOON_SECONDS;
-      count.append(el('span', 'chevron', '›'), el('span', 'resets-title', 'Limit resets'),
-        el('span', 'stat-value', resets.available ? `${resets.available} available` : resets.manual ? 'none added' : 'none available'));
-      head.append(count);
-      if (first) head.append(el('span', `small ${soonFirst ? 'soon-text' : 'muted'}`,
-        `next expires ${when(first.expires_at, current)} · in ${span(first.expires_at - current)}`));
+      head.setAttribute('aria-label', `${tool.label} limit resets`);
+      const sorted = [...(resets?.credits ?? [])].sort((a, b) => a.expires_at - b.expires_at);
+      const first = sorted[0];
+      const sub = first ? `expires in ${span(first.expires_at - current)}` : resets ? (resets.manual ? 'none added' : 'none available') : 'not read yet';
+      head.append(el('span', 'stat-head', 'Limit resets'), el('span', 'stat-value', resets?.available ?? '—'), el('span', 'stat-sub', sub));
       box.append(head);
       const pop = el('div', 'popover-surface reset-pop'), list = el('ul', 'reset-list');
       sorted.forEach(credit => {
@@ -591,7 +772,7 @@
         const item = el('li', `reset-item${soon ? ' soon' : ''}`);
         item.append(el('span', '', credit.title), el('span', 'mono reset-when',
           `expires ${when(credit.expires_at, current)} · in ${span(left)}`));
-        if (resets.manual) {
+        if (resets?.manual) {
           const remove = el('button', 'text-button', 'Remove');
           remove.setAttribute('type', 'button');
           remove.setAttribute('data-key', `${tool.name}:reset-remove:${credit.id}`);
@@ -603,36 +784,23 @@
         list.append(item);
       });
       if (sorted.length) pop.append(list);
-      if (resets.manual) {
-        const tools = el('div', 'reset-tools'), add = el('button', 'text-button', '+ Add a reset');
+      if (resets?.manual) {
+        const tools = el('div', 'reset-tools'), add = el('button', 'text-button');
+        add.append(icon('plus'), el('span', '', 'Add a reset'));
         add.setAttribute('type', 'button');
         add.setAttribute('data-key', `${tool.name}:reset-add`);
         add.addEventListener('click', () => openReset(tool.name));
         tools.append(add);
         pop.append(tools);
         pop.append(el('p', 'reset-note', `Entered by you: stoke can't read ${tool.label}'s resets. Remove one after you use it in the ${tool.label} app. Stoke never spends one.`));
-      } else pop.append(el('p', 'reset-note', `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.`));
+      } else pop.append(el('p', 'reset-note', resets ? `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.` : 'Not read yet. Refresh usage to read available resets. Stoke only shows them; it never spends one.'));
       box.append(pop);
-      return box;
+      item.append(box);
+      return item;
     }
-    function resetPlaceholder() {
-      const box = el('div', 'resets-placeholder');
-      box.setAttribute('aria-hidden', 'true');
-      box.setAttribute('inert', '');
-      return box;
-    }
-    function syncResetPlaceholders() {
-      // Match actual summary wrapping and font metrics without synthetic credits.
-      const summaries = Array.from(app.querySelectorAll('.resets-head'));
-      const height = Math.max(0, ...summaries.map(summary => summary.getBoundingClientRect().height));
-      app.querySelectorAll('.resets-placeholder').forEach(box => {
-        box.hidden = height === 0;
-        box.style.height = `${height}px`;
-      });
-    }
-    window.addEventListener('resize', syncResetPlaceholders);
     function planButton(tool) {
-      const button = el('button', 'refresh', tool.plan ? '✎ Edit plan' : '+ Plan a stoke');
+      const button = el('button', 'refresh');
+      button.append(icon(tool.plan ? 'clock' : 'plus'), el('span', '', tool.plan ? 'Edit plan' : 'Plan a stoke'));
       button.setAttribute('type', 'button');
       button.setAttribute('data-key', `${tool.name}:plan-open`);
       button.setAttribute('data-tool', tool.name);
@@ -675,10 +843,12 @@
       if (!gap) { offsetDialog.close(); return; }
       const { claude, codex } = state.tools;
       const ends = `${claude.label} ends ${clock(claude.five_hour.resets_at)} · ${codex.label} ends ${clock(codex.five_hour.resets_at)}`;
-      const apart = gap.aligned ? `✓ ${dur(gap.gap)} apart — already offset, nothing to do` : `${dur(gap.gap)} apart · goal 2 h 30 m`;
+      const apart = gap.aligned ? `${dur(gap.gap)} apart — already offset, nothing to do` : `${dur(gap.gap)} apart · goal 2 h 30 m`;
       const statusSignature = JSON.stringify([ends, apart, gap.aligned]);
       if (statusSignature !== offsetStatusSignature) {
-        offsetStatus.replaceChildren(el('span', '', ends), el('br'), el('span', gap.aligned ? 'ok' : '', apart));
+        const line = el('span', gap.aligned ? 'status-line ok' : '', apart);
+        if (gap.aligned) line.prepend(icon('check'));
+        offsetStatus.replaceChildren(el('span', '', ends), el('br'), line);
         offsetStatusSignature = statusSignature;
       }
       document.querySelector('#offset-pick').hidden = gap.aligned;
@@ -719,7 +889,9 @@
             const item = el('li'), button = el('button', 'opt'), copy = el('span');
             button.setAttribute('type', 'button');
             copy.append(el('span', 'opt-time', row.time), el('span', 'opt-idle', row.idle));
-            button.append(copy, el('span', 'opt-action', 'Set plan →'));
+            const action = el('span', 'opt-action', 'Set plan');
+            action.append(icon('chevron'));
+            button.append(copy, action);
             button.addEventListener('click', () => setOffsetPlan(row.T));
             item.append(button);
             list.append(item);
@@ -761,18 +933,31 @@
     }
     document.querySelector('#offset-close').addEventListener('click', () => offsetDialog.close());
     offsetDialog.addEventListener('close', () => restoreFocus('offset-open'));
-    function planRow(tool, current = now()) {
-      const row = el('div', 'plan-row'), plan = tool.plan;
-      if (plan) {
-        let description = `Plan · ${plan.repeat === 'daily' ? `every day ${plan.time}` : `once, ${when(plan.target_at, current)}`}`;
-        if (plan.auto_after != null) description += ` · then auto-stoke ${plan.auto_after ? 'on' : 'off'}`;
-        row.append(el('p', '', description), el('p', 'small muted', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
-      }
+    function recentPlanOutcome(tool, current = now()) {
       const outcome = tool.plan_outcome;
-      if (outcome && ['missed', 'broken'].includes(outcome.result) && current - outcome.at >= 0 && current - outcome.at < 86400) {
-        row.append(el('p', 'small muted', `Last plan ${clock(outcome.target_at)}: ${outcome.result === 'broken' ? 'skipped by manual stoke' : 'missed'}`));
+      return outcome && ['missed', 'broken'].includes(outcome.result) && current - outcome.at >= 0 && current - outcome.at < 86400 ? outcome : null;
+    }
+    function planSection(tool, current = now()) {
+      const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
+      section.append(el('h3', '', 'Plan'));
+      const plan = tool.plan;
+      if (plan) {
+        const box = el('div', 'signin-row'), head = el('div', 'row-head');
+        head.append(el('strong', '', plan.repeat === 'daily' ? `Every day ${plan.time}` : `Once, ${when(plan.target_at, current)}`),
+          el('span', 'muted', plan.auto_after == null ? 'auto-stoke kept as is' : `then auto-stoke ${plan.auto_after ? 'on' : 'off'}`));
+        box.append(head, el('span', 'mono', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
+        rows.append(box);
       }
-      return row;
+      const outcome = recentPlanOutcome(tool, current);
+      if (outcome) {
+        const box = el('div', 'signin-row warn'), head = el('div', 'row-head');
+        head.append(el('strong', '', 'Last plan'), el('span', 'muted', when(outcome.target_at, current)));
+        box.append(head, el('span', 'mono status-warn', outcome.result === 'broken' ? 'skipped by manual stoke' : 'missed'));
+        rows.append(box);
+      }
+      if (!rows.childElementCount) rows.append(el('span', 'muted', 'No plan.'));
+      section.append(rows);
+      return section;
     }
     function updatePlanSave() {
       const lines = [], value = planTime.value, current = now();
@@ -820,6 +1005,9 @@
     function openPlan(name, focusKey) {
       if (planSaving || busy.has(name)) return;
       const plan = state.tools[name].plan;
+      const outcome = recentPlanOutcome(state.tools[name]), line = document.querySelector('#plan-outcome');
+      line.hidden = !outcome;
+      line.textContent = outcome ? `Last plan ${when(outcome.target_at, now())}: ${outcome.result === 'broken' ? 'skipped by manual stoke' : 'missed'}` : '';
       planTool = name;
       planFocusKey = focusKey;
       planSaving = false;
@@ -891,32 +1079,37 @@
     function readStatus(record, current) {
       if (!record) return 'not read yet';
       const at = readTime(record.at, current);
-      if (record.ok) return `✓ last read ${at}`;
-      if (record.signed_out) return `✕ signed out since ${at}`;
-      return `✕ last read failed ${at}: ${record.error}`;
+      if (record.ok) return `last read ${at}`;
+      if (record.signed_out) return `signed out since ${at}`;
+      return `last read failed ${at}: ${record.error}`;
     }
     function signinState(tool, current = now()) {
       const auth = tool.auth, rows = [];
       const status = readStatus(tool.last_read, current), level = tool.last_read && !tool.last_read.ok ? 'bad' : 'ok';
-      if (auth.shared) return [{ title: 'Stoking and reading usage', kind: auth.shared.label, status, level }];
+      const readIcon = tool.last_read ? (tool.last_read.ok ? 'check' : 'cross') : null;
+      if (auth.shared) return [{ title: 'Stoking and reading usage', kind: auth.shared.label, status, level, icon: readIcon }];
       if (auth.stoke) {
         const expires = auth.stoke.expires_at, left = expires - current, soon = expires != null && left < 30 * 86400;
-        const expiry = expires == null ? 'expiry not set' : `${soon ? '⚠ ' : ''}expires ${dateText(expires)} ${localDate(expires).year} · ${left <= 0 ? 'expired' : `in ${span(left)}`}`;
-        rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok' });
+        const expiry = expires == null ? 'expiry not set' : `expires ${dateText(expires)} ${localDate(expires).year} · ${left <= 0 ? 'expired' : `in ${span(left)}`}`;
+        rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok', icon: soon ? 'warning' : null });
       }
-      if (auth.read) rows.push({ title: 'Reading usage', kind: auth.read.label, status, level });
+      if (auth.read) rows.push({ title: 'Reading usage', kind: auth.read.label, status, level, icon: readIcon });
       return rows;
     }
     const dialogFocus = new Map();
     function infoContent(tool) {
       const parts = [];
       if (tool.hasWarning) parts.push(warning(tool));
+      parts.push(planSection(tool));
       const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
       section.append(el('h3', '', 'Sign-in'));
       signinState(tool).forEach(row => {
         const box = el('div', `signin-row${row.level === 'ok' ? '' : ' ' + row.level}`), head = el('div', 'row-head');
         head.append(el('strong', '', row.title), el('span', 'muted', row.kind));
-        box.append(head, el('span', `mono status-${row.level}`, row.status));
+        const status = el('span', `mono status-line status-${row.level}`);
+        if (row.icon) status.append(icon(row.icon));
+        status.append(el('span', '', row.status));
+        box.append(head, status);
         rows.append(box);
       });
       section.append(rows);
@@ -951,12 +1144,15 @@
       const line = el('button', `warn-line${tool.caution ? ' caution' : ''}`);
       line.setAttribute('type', 'button');
       line.setAttribute('data-key', `${tool.name}:warning`);
-      line.append(el('span', '', '⚠'), el('span', 'warn-text', tool.warning), el('span', 'more', 'details ›'));
+      const copy = el('span', 'warn-text');
+      copy.append(el('b', '', tool.label), el('span', '', ` · ${tool.warning.charAt(0).toLowerCase()}${tool.warning.slice(1)}`));
+      line.append(icon('warning'), copy, el('span', 'more', 'details'), icon('chevron'));
       line.addEventListener('click', event => { event.stopPropagation(); openInfo(tool.name); });
       return line;
     }
     function weeklyNote(tool, entry) {
-      const line = el('div', 'note-line'), text = el('button', 'note-text', `${tool.label} weekly limit reset early · ${weeklyRange(entry)}`);
+      const line = el('div', 'note-line'), text = el('button', 'note-text');
+      text.append(el('b', '', tool.label), el('span', '', ` weekly limit reset early · ${weeklyRange(entry)}`));
       text.setAttribute('type', 'button');
       text.setAttribute('data-key', `${tool.name}:weekly-info:${entry.id}`);
       text.addEventListener('click', () => openInfo(tool.name));
@@ -965,11 +1161,13 @@
       dismiss.setAttribute('aria-label', 'Dismiss');
       dismiss.setAttribute('data-key', `${tool.name}:weekly-dismiss:${entry.id}`);
       dismiss.addEventListener('click', () => act(tool.name, 'weekly-resets/dismiss', { id: entry.id }));
-      line.append(el('span', 'note-icon', '↺'), text, dismiss);
+      const image = icon('undo');
+      image.classList.add('note-icon');
+      line.append(image, text, dismiss);
       return line;
     }
     function menuIcon(kind) {
-      const image = svg('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+      const image = svg('svg', { class: 'menu-icon', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
       if (kind === 'settings') {
         ['M4 7h9', 'M17 7h3', 'M4 17h3', 'M11 17h9'].forEach(d => image.append(svg('path', { d })));
         image.append(svg('circle', { cx: 15, cy: 7, r: 2 }), svg('circle', { cx: 9, cy: 17, r: 2 }));
@@ -983,7 +1181,7 @@
       summary.setAttribute('data-key', `${tool.name}:menu`);
       summary.setAttribute('aria-label', `${tool.label} menu`);
       summary.setAttribute('title', 'Menu');
-      const image = svg('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'currentColor', stroke: 'none', 'aria-hidden': 'true' });
+      const image = svg('svg', { class: 'more-icon', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
       [5, 12, 19].forEach(cx => image.append(svg('circle', { cx, cy: 12, r: 1.6 })));
       summary.append(image);
       if (tool.hasWarning) summary.append(dot(tool));
@@ -1031,8 +1229,8 @@
       arUnit.value = ar.seconds % 60 === 0 ? '60' : '1';
       arValue.value = ar.seconds / Number(arUnit.value);
       document.querySelector('#ar-hint').textContent = name === 'claude'
-        ? 'Reads usage without sending a message. Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude. ↻ Refresh usage always works.'
-        : 'Reads Codex usage without sending a message. ↻ Refresh usage always works.';
+        ? 'Reads usage without sending a message. Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude. Refresh usage always works.'
+        : 'Reads Codex usage without sending a message. Refresh usage always works.';
       syncSettings();
       dialogFocus.set(settingsDialog, document.activeElement?.dataset?.key);
       settingsDialog.showModal();
@@ -1121,9 +1319,9 @@
     }
     function stat(list, title, tool, field) {
       const item = el('div', 'stat');
-      const head = el('dt', 'stat-head', title);
+      const head = el('div', 'stat-head', title);
       if (field === 'lastAt') head.append(lastInfo(tool));
-      item.append(head, text('dd', 'stat-value', tool, field));
+      item.append(head, text('span', 'stat-value', tool, field));
       list.append(item);
       return item;
     }
@@ -1133,7 +1331,7 @@
         const tool = tools.get(control.dataset.tool);
         if (!tool) return;
         control.disabled = busy.has(tool.name) || (control.dataset.action === 'refresh' ? !tool.refreshable || tool.refreshing || tool.running : control.dataset.action === 'stoke' && tool.running);
-        if (control.dataset.action === 'refresh') control.textContent = refreshText(tool);
+        if (control.dataset.action === 'refresh') control.querySelector('.button-label').textContent = refreshText(tool);
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
       if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
@@ -1244,9 +1442,6 @@
       });
       const vm = Object.values(state?.tools ?? {}).map(tool => view(tool));
       app.replaceChildren(renderDial(state, vm));
-      resetsObserver.disconnect();
-      app.querySelectorAll('.resets-head').forEach(head => resetsObserver.observe(head));
-      syncResetPlaceholders();
       if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
       if (infoDialog.open && state.tools[infoTool]) {
         document.querySelector('#info-body').replaceChildren(...infoContent(view(state.tools[infoTool])));
@@ -1276,35 +1471,44 @@
     // Dial
     function renderDial(currentState, vm) {
       const { outer, wrap } = page(standardHeader(currentState));
+      const alerts = el('div', 'alerts');
+      vm.filter(tool => tool.hasWarning).sort((a, b) => Number(a.caution) - Number(b.caution))
+        .forEach(tool => alerts.append(warnLine(tool)));
       vm.flatMap(tool => tool.weeklyResets
         .filter(entry => entry.kind === 'early' && !entry.dismissed).map(entry => ({ tool, entry })))
         .sort((a, b) => b.entry.to_at - a.entry.to_at)
-        .forEach(({ tool, entry }) => wrap.append(weeklyNote(tool, entry)));
+        .forEach(({ tool, entry }) => alerts.append(weeklyNote(tool, entry)));
+      if (alerts.childElementCount) wrap.append(alerts);
       const main = el('main', 'cards');
       vm.forEach(tool => {
         const card = el('section', 'card');
-        if (tool.hasWarning) card.append(warnLine(tool));
         const heading = el('div', 'card-heading');
         const tools = el('div', 'heading-tools');
         tools.append(moreMenu(tool));
         heading.append(toolTitle(tool), tools);
         const body = el('div', 'dial-body'), dial = el('div', 'dial');
         const ring = live(svg('svg', { width: 200, height: 200, viewBox: '0 0 200 200', role: 'img', 'aria-label': tool.dialLabel }), 'dialLabel', tool);
-        ring.append(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', stroke: '#252A30', 'stroke-width': 12 }));
-        ring.append(live(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', stroke: '#F5A142', 'stroke-width': 12, 'stroke-linecap': 'round', transform: 'rotate(-90 100 100)' }), 'arc', tool));
+        ring.append(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', class: 'dial-track', 'stroke-width': 12 }));
+        ring.append(live(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', class: 'dial-arc', 'stroke-width': 12, 'stroke-linecap': 'round', transform: 'rotate(-90 100 100)' }), 'arc', tool));
         const center = el('div', 'dial-center');
         center.append(text('span', 'remaining', tool, 'remaining'), text('span', 'small muted', tool, 'dialCaption'));
         dial.append(ring, center);
         const details = el('div', 'dial-details'), range = el('div', 'usage-label');
         range.append(el('span', 'muted', 'Window'), text('span', 'mono', tool, 'windowRange'));
         details.append(range, dialUsage(tool, false), dialUsage(tool, true));
-        details.append(tool.resets != null ? resetCredits(tool) : resetPlaceholder());
         body.append(dial, details);
-        const stats = el('dl', 'stats');
+        const stats = el('div', 'stats');
         const last = stat(stats, 'Last stoke', tool, 'lastAt');
-        if (!tool.lastOk && tool.lastTs != null) last.append(el('dd', 'last-result failed', tool.lastResult));
-        stat(stats, 'Next stoke', tool, 'nextAt').append(text('dd', 'small muted', tool, 'nextMeta'));
-        card.append(heading, body, planRow(tool), stats);
+        if (!tool.lastOk && tool.lastTs != null) last.append(el('span', 'last-result failed', tool.lastResult));
+        const next = stat(stats, 'Next stoke', tool, 'nextAt');
+        next.append(text('span', 'small muted', tool, 'nextMeta'));
+        if (tool.plan && !tool.upcomingPlanned) {
+          const line = el('span', 'next-plan');
+          line.append(icon('clock'), el('span', '', `Plan ${tool.plan.time}`));
+          next.append(line);
+        }
+        if (tool.refreshable || tool.manualResets) stats.append(resetTile(tool));
+        card.append(heading, body, stats);
         const actions = el('div', 'actions');
         actions.append(stokeControl(tool), refreshControl(tool), planButton(tool));
         card.append(actions);
@@ -1322,8 +1526,23 @@
       track.append(fill);
       group.append(label, track);
       if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
-      if (weekly && tool.limitsAt) group.append(text('span', 'weekly-reset', tool, 'limitsAt'));
-      if (weekly && tool.autoRefreshText) group.append(el('span', 'weekly-reset', tool.autoRefreshText));
+      if (weekly && (tool.limitsAt || tool.autoRefreshText)) {
+        const row = el('div', 'meta-row');
+        if (tool.limitsAt) row.append(text('span', 'weekly-reset', tool, 'limitsAt'));
+        if (tool.autoRefreshText) {
+          const box = popover(tool, 'auto-refresh', 'auto-ic'), summary = el('summary');
+          const every = tool.autoRefreshText.replace(/^auto-refresh /, '');
+          summary.setAttribute('data-key', `${tool.name}:auto-refresh-info`);
+          summary.setAttribute('aria-label', `Auto-refresh on, ${every}`);
+          summary.setAttribute('title', `Auto-refresh on · ${every}`);
+          summary.append(icon('cycle'));
+          const pop = el('div', 'popover-surface info-pop');
+          pop.append(el('strong', '', 'Auto-refresh on'), el('span', 'muted', `Usage is read ${every}, without sending a message.`));
+          box.append(summary, pop);
+          row.append(box);
+        }
+        group.append(row);
+      }
       return group;
     }
 

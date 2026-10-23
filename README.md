@@ -2,7 +2,10 @@
 
 Keeps the 5-hour usage window of Claude Code and Codex CLI always running.
 
-![The stoke panel: one card per tool with the current window, 5-hour and weekly usage, and the next stoke](docs/panel.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/panel-dark.png">
+  <img alt="The stoke panel: one card per tool with the current window, 5-hour and weekly usage, last and next stoke, and limit resets" src="docs/panel-light.png">
+</picture>
 
 > [!NOTE]
 > Stoke is an independent project, not affiliated with or endorsed by Anthropic or OpenAI. It only drives the official CLIs the way a user would, but automated use of a subscription may still fall under each provider's terms. Read them and use stoke at your own risk.
@@ -18,13 +21,13 @@ Stoke sends one tiny message (`hi`) through the official CLI the moment a window
 | Feature | What it does |
 |---|---|
 | **Automatic stokes** | One loop per tool: stoke, read the window's end time from the CLI's own output, wait until it ends (+90 s), repeat. Failures back off (1, 5, 15, 30, 60 min). |
-| **Panel** | One card per tool: time left in the window, 5-hour and weekly usage, last and next stoke. Auto-stoke switch and **Stoke now** button per tool. |
+| **Panel** | One card per tool: time left in the window, 5-hour and weekly usage, last and next stoke, limit resets. Auto-stoke switch and **Stoke now** button per tool. Light and dark theme. |
 | **Usage without a message** | **Refresh usage** reads current usage without starting a window (Codex through `codex app-server`, Claude through a separate sign-in). Optional automatic refresh per tool (Settings). |
 | **Plans** | Start a tool's window at a chosen local time, once or every day. Automatic stokes pause in the 5 hours before that time so an earlier window does not run into it. |
 | **Window offset** | With both tools on, the header shows the gap between their windows and suggests one-click plans that move them 2.5 h apart, so one of them always resets soon. |
 | **Limit resets** | Codex reset credits are read and listed with their expiry. Claude's cannot be read; you can enter them by hand as a reminder. Stoke never spends a credit. |
 | **Early weekly resets** | When a provider resets the weekly limit early, the panel shows a note and keeps the history (Info). |
-| **Warnings** | A short line on the card when something needs attention; see [Warnings](#warnings). |
+| **Warnings** | A short line above the cards when something needs attention; see [Warnings](#warnings). |
 
 Only the official, unmodified `claude` and `codex` binaries talk to the providers. Stoke never calls a provider API with your credentials.
 
@@ -118,9 +121,11 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 
 - The **Auto-stoke** switch in the card's **⋯ menu** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
 - **Refresh usage** reads usage without sending a message. **Settings** in the card's **⋯ menu** turns automatic refresh on (60 seconds to 24 hours).
-- **Info** in the card's **⋯ menu** shows the full text of a warning, the sign-in state and the history of early weekly resets.
+- **Info** in the card's **⋯ menu** shows the full text of a warning, the plan with its quiet hours and last result, the sign-in state and the history of early weekly resets.
+- **Limit resets** on the card opens the list of available resets.
 - **Plan a stoke** sets a start time. In the 5 hours before it, automatic stokes wait; a manual stoke asks before it skips the plan. A plan is refused if the current window would still be open at that time.
 - **Gap** in the header (both tools on auto) opens suggested start times that move the two windows 2.5 h apart.
+- The round button at the top right switches between light, dark and the system theme. The choice is kept in that browser only.
 
 ### Warnings
 
