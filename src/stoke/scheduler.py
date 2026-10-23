@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from datetime import datetime, time as local_time, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Mapping, cast
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from . import clock, store
 from .config import Settings, parse_date
-from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredits, StokeRecord, StokeResult, ToolState, Window, validate_auto_refresh, validate_plan
+from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,8 @@ STALE_RESET_LIMIT = 4
 REFRESH_BUSY_RETRY_SECONDS = 10
 PLAN_QUIET_SECONDS = 5 * 3600
 PLAN_GRACE_SECONDS = 900
+WEEKLY_SHIFT_SECONDS = 86400
+WEEKLY_DROP_POINTS = 10
 
 
 class AlreadyRunning(Exception):
@@ -115,6 +118,28 @@ def opened_new_window(
     if not previous_five_hour.resets_at <= attempt_at <= previous_five_hour.resets_at + 900:
         return None
     return new_five_hour.resets_at >= attempt_at + 4 * 3600
+
+
+def detect_weekly_reset(
+    previous: Window | None, previous_at: int | None, current: Window | None, observed_at: int,
+) -> bool:
+    """Detect a substantial weekly change before the old week ends."""
+    return (
+        previous is not None and previous_at is not None and current is not None
+        and previous.resets_at > observed_at
+        and (current.resets_at - previous.resets_at >= WEEKLY_SHIFT_SECONDS
+             or previous.used_percent - current.used_percent >= WEEKLY_DROP_POINTS)
+    )
+
+
+def _credit_used(previous: list[ResetCredit], current: list[ResetCredit], observed_at: int) -> bool:
+    """Only a missing, unexpired credit counts as spent."""
+    available = {(credit.title, credit.granted_at, credit.expires_at) for credit in current}
+    return any(
+        credit.expires_at > observed_at
+        and (credit.title, credit.granted_at, credit.expires_at) not in available
+        for credit in previous
+    )
 
 
 def compute_warning(state: ToolState) -> str | None:
@@ -219,6 +244,35 @@ class Scheduler:
         """Report the provider's optional read capability."""
         return name in self.readers
 
+    def _record_weekly_reset(
+        self, state: ToolState, current: Window, observed_at: int, resets: ResetCredits | None = None,
+    ) -> bool:
+        previous, previous_at = state.weekly, state.limits_at
+        if not detect_weekly_reset(previous, previous_at, current, observed_at):
+            return False
+        assert previous is not None and previous_at is not None
+        credits = None if state.resets is None else [replace(credit) for credit in state.resets.credits]
+        kind = "early"
+        if resets is not None:
+            if credits is not None and _credit_used(credits, resets.credits, observed_at):
+                kind = "credit"
+            credits = None
+        state.weekly_resets.insert(0, WeeklyReset(
+            uuid4().hex[:12], kind, previous_at, observed_at, previous.used_percent, previous.resets_at,
+            current.used_percent, current.resets_at, credits_before=credits,
+        ))
+        logger.info("tool=%s weekly reset detected kind=%s", state.name, kind)
+        return True
+
+    async def _refresh_after_weekly_reset(self, name: str) -> None:
+        """Resolve pending classification through the normal usage reader."""
+        try:
+            await self.refresh_limits(name)
+        except (AlreadyRunning, ProviderError):
+            pass
+        except Exception as error:
+            logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
+
     async def refresh_limits(self, name: str) -> ToolState:
         """Update usage only; a read must never determine stoke scheduling."""
         if name not in self.readers:
@@ -254,9 +308,15 @@ class Scheduler:
                         snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
                     )
                 if snapshot.weekly is not None:
+                    self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
                     state.weekly = snapshot.weekly
                 state.limits_at = observed
                 if snapshot.resets is not None:
+                    for entry in state.weekly_resets:
+                        if entry.credits_before is not None:
+                            if _credit_used(entry.credits_before, snapshot.resets.credits, observed):
+                                entry.kind = "credit"
+                            entry.credits_before = None
                     state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
             self._persist()
             return state
@@ -357,6 +417,16 @@ class Scheduler:
         self.events[name].set()
         return state
 
+    def dismiss_weekly_reset(self, name: str, id: str) -> ToolState:
+        """Hide one notification on every client, retaining its history."""
+        state = self.states[name]
+        entry = next((entry for entry in state.weekly_resets if entry.id == id), None)
+        if entry is None:
+            raise ValueError("unknown weekly reset")
+        entry.dismissed = True
+        self._persist()
+        return state
+
     def set_plan(
         self, name: str, time: str, repeat: PlanRepeat, auto_after: bool | None,
     ) -> ToolState:
@@ -385,6 +455,7 @@ class Scheduler:
         lock = self.locks[name]
         if lock.locked():
             raise AlreadyRunning(name)
+        follow_up = False
         async with lock:
             state = self.states[name]
             attempt_at = clock.now()
@@ -419,6 +490,9 @@ class Scheduler:
                             state, attempt_at, trigger, "reset time not in the future", started, stale=True,
                         )
                     else:
+                        if result.weekly is not None:
+                            detected = self._record_weekly_reset(state, result.weekly, completed_at)
+                            follow_up = detected and state.resets is not None
                         state.five_hour = result.five_hour
                         state.weekly = result.weekly
                         state.limits_at = completed_at
@@ -453,6 +527,10 @@ class Scheduler:
                     self._attempts.discard(task)
                 self._persist()
                 self.events[name].set()
+        if follow_up and self.can_refresh(name) and not state.running and not state.refreshing:
+            follow_task = asyncio.create_task(self._refresh_after_weekly_reset(name), name=f"weekly-refresh:{name}")
+            self._attempts.add(follow_task)
+            follow_task.add_done_callback(self._attempts.discard)
         return state
 
     def _record_failure(

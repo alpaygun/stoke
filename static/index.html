@@ -165,6 +165,11 @@
     .warn-line .warn-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .warn-line .more { flex: none; font-family: var(--mono); font-size: 12px; color: #FF8A7A; }
     .warn-line.caution .more { color: #F5A142; }
+    .note-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 6px 12px; border: 1px solid #1E4D3B; border-radius: 8px; background: #11241C; color: #BDEBD3; font-size: 13px; text-align: left; }
+    .note-line .note-icon { flex: none; color: #4FD1A0; }
+    .note-line button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; }
+    .note-line .note-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+    .note-line .note-dismiss { flex: none; width: 44px; height: 44px; font-size: 22px; }
     .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: #FF8A7A; vertical-align: middle; }
     .dot.caution { background: #F5A142; }
     .heading-tools { display: flex; align-items: center; gap: 4px; }
@@ -319,9 +324,16 @@
       const date = localDate(value);
       return `${pad(date.hour)}:${pad(date.minute)}`;
     }
-    function dateText(value) {
+    function dateText(value, compact = false) {
       const date = localDate(value);
+      if (compact) return `${MONTHS[date.month - 1]} ${date.day}`;
       return `${DAYS[new Date(calendarDay(date)).getUTCDay()]} ${date.day} ${MONTHS[date.month - 1]}`;
+    }
+    function weeklyRange(entry) {
+      const start = `${dateText(entry.from_at, true)}, ${clock(entry.from_at)}`;
+      return calendarDay(localDate(entry.from_at)) === calendarDay(localDate(entry.to_at))
+        ? `${start}–${clock(entry.to_at)}`
+        : `${start} – ${dateText(entry.to_at, true)}, ${clock(entry.to_at)}`;
     }
     function readTime(value, current = now()) {
       const date = localDate(value), today = localDate(current);
@@ -381,6 +393,7 @@
         refreshable: !!tool.refreshable, refreshing: !!tool.refreshing,
         resets: tool.manual_resets_allowed ? { manual: true, credits: tool.manual_resets, available: tool.manual_resets.length } : tool.resets,
         auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: tool.warning === 'token_expiring',
+        weeklyResets: tool.weekly_resets ?? [],
         autoRefreshText: tool.auto_refresh?.enabled ? `auto-refresh every ${interval(tool.auto_refresh.seconds)}` : '',
         plan: tool.plan, plan_outcome: tool.plan_outcome, quiet_from: tool.quiet_from,
         open, elapsed, remaining,
@@ -730,6 +743,18 @@
       });
       section.append(rows);
       parts.push(section);
+      const resets = el('section', 'setting-section'), history = el('div', 'signin-rows');
+      resets.append(el('h3', '', 'Weekly resets'));
+      tool.weeklyResets.forEach(entry => {
+        const box = el('div', 'signin-row'), head = el('div', 'row-head');
+        head.append(el('strong', '', entry.kind === 'credit' ? 'Reset credit used' : 'Reset early'),
+          el('span', 'muted', `weekly ${Math.round(entry.before_used)}% → ${Math.round(entry.after_used)}%`));
+        box.append(head, el('span', 'mono', weeklyRange(entry)));
+        history.append(box);
+      });
+      if (!tool.weeklyResets.length) history.append(el('span', 'muted', 'None detected yet.'));
+      resets.append(history);
+      parts.push(resets);
       return parts;
     }
     function dot(tool) { return el('span', `dot${tool.caution ? ' caution' : ''}`); }
@@ -750,6 +775,19 @@
       line.setAttribute('data-key', `${tool.name}:warning`);
       line.append(el('span', '', '⚠'), el('span', 'warn-text', tool.warning), el('span', 'more', 'details ›'));
       line.addEventListener('click', event => { event.stopPropagation(); openInfo(tool.name); });
+      return line;
+    }
+    function weeklyNote(tool, entry) {
+      const line = el('div', 'note-line'), text = el('button', 'note-text', `${tool.label} weekly limit reset early · ${weeklyRange(entry)}`);
+      text.setAttribute('type', 'button');
+      text.setAttribute('data-key', `${tool.name}:weekly-info:${entry.id}`);
+      text.addEventListener('click', () => openInfo(tool.name));
+      const dismiss = el('button', 'note-dismiss', '×');
+      dismiss.setAttribute('type', 'button');
+      dismiss.setAttribute('aria-label', 'Dismiss');
+      dismiss.setAttribute('data-key', `${tool.name}:weekly-dismiss:${entry.id}`);
+      dismiss.addEventListener('click', () => act(tool.name, 'weekly-resets/dismiss', { id: entry.id }));
+      line.append(el('span', 'note-icon', '↺'), text, dismiss);
       return line;
     }
     function iconButton(tool, kind) {
@@ -1039,6 +1077,10 @@
     // Dial
     function renderDial(currentState, vm) {
       const { outer, wrap } = page(standardHeader(currentState));
+      vm.flatMap(tool => tool.weeklyResets
+        .filter(entry => entry.kind === 'early' && !entry.dismissed).map(entry => ({ tool, entry })))
+        .sort((a, b) => b.entry.to_at - a.entry.to_at)
+        .forEach(({ tool, entry }) => wrap.append(weeklyNote(tool, entry)));
       const main = el('main', 'cards');
       vm.forEach(tool => {
         const card = el('section', 'card');

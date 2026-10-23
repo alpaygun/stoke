@@ -119,6 +119,18 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         state = scheduler.set_auto(name, body["enabled"])
         return serialize(state)
 
+    @app.post("/api/tools/{name}/weekly-resets/dismiss")
+    async def dismiss_weekly_reset(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"id"} or not isinstance(body["id"], str):
+                raise ValueError("body must contain exactly id: str")
+            state = scheduler.dismiss_weekly_reset(name, body["id"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return serialize(state)
+
     @app.post("/api/tools/{name}/auto-refresh")
     async def set_auto_refresh(name: str, request: Request) -> dict[str, Any]:
         require_tool(name)

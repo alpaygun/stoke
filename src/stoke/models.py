@@ -146,6 +146,22 @@ class ManualReset:
 
 
 @dataclass
+class WeeklyReset:
+    """A permanent observation of an early weekly limit reset."""
+
+    id: str
+    kind: str
+    from_at: int
+    to_at: int
+    before_used: float
+    before_resets_at: int
+    after_used: float
+    after_resets_at: int
+    dismissed: bool = False
+    credits_before: list[ResetCredit] | None = None
+
+
+@dataclass
 class ToolState:
     """Current limits, scheduling and attempt state for one tool."""
 
@@ -168,6 +184,7 @@ class ToolState:
     auto_refresh: AutoRefresh = field(default_factory=AutoRefresh)
     last_read: ReadRecord | None = None
     manual_resets: list[ManualReset] = field(default_factory=list)
+    weekly_resets: list[WeeklyReset] = field(default_factory=list)
 
 
 def serialize_tool(
@@ -190,6 +207,8 @@ def serialize_tool(
         data["refreshable"] = refreshable
         data["manual_resets_allowed"] = manual_resets_allowed
         data["manual_resets"] = [asdict(entry) for entry in state.manual_resets if entry.expires_at > now]
+        for entry in data["weekly_resets"]:
+            del entry["credits_before"]
         data["auth"] = {key: dict(value) for key, value in (auth_labels or {}).items()}
         expires = settings.claude_token_expires if state.name == "claude" else None
         if state.name == "claude" and "stoke" in data["auth"]:

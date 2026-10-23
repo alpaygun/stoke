@@ -53,7 +53,7 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
         assert state.limits_at is None
         assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None, "manual_resets": []}
+        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None, "manual_resets": [], "weekly_resets": []}
     assert "using defaults" not in caplog.text
 
 

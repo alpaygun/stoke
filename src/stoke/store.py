@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, Window, sanitize_reset_title, serialize_tool, validate_auto_refresh, validate_plan
+from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_auto_refresh, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -28,12 +28,16 @@ def _bool(value: Any) -> bool:
     return value
 
 
+def _percent(value: Any) -> float:
+    if type(value) not in {float, int} or not math.isfinite(value) or not 0 <= value <= 100:
+        raise ValueError("invalid percentage")
+    return float(value)
+
+
 def _window(value: Any) -> Window | None:
     if value is None:
         return None
-    percent = value["used_percent"]
-    if type(percent) not in {float, int} or not math.isfinite(percent) or not 0 <= percent <= 100:
-        raise ValueError("invalid percentage")
+    percent = _percent(value["used_percent"])
     minutes = value["window_minutes"]
     return Window(float(percent), _int(value["resets_at"]), None if minutes is None else _int(minutes, 1))
 
@@ -56,20 +60,22 @@ def _record(value: Any) -> StokeRecord | None:
     )
 
 
+def _reset_credit(entry: Any) -> ResetCredit:
+    if not isinstance(entry, dict) or not isinstance(entry.get("title"), str) or "granted_at" not in entry:
+        raise ValueError("invalid reset credit")
+    granted = entry["granted_at"]
+    return ResetCredit(
+        sanitize_reset_title(entry["title"]), None if granted is None else _int(granted),
+        _int(entry.get("expires_at")),
+    )
+
+
 def _resets(value: Any) -> ResetCredits | None:
     if value is None:
         return None
     if not isinstance(value, dict) or not isinstance(value.get("credits"), list):
         raise ValueError("invalid reset credits")
-    credits = []
-    for entry in value["credits"]:
-        if not isinstance(entry, dict) or not isinstance(entry.get("title"), str) or "granted_at" not in entry:
-            raise ValueError("invalid reset credit")
-        granted = entry["granted_at"]
-        credits.append(ResetCredit(
-            sanitize_reset_title(entry["title"]), None if granted is None else _int(granted),
-            _int(entry.get("expires_at")),
-        ))
+    credits = [_reset_credit(entry) for entry in value["credits"]]
     credits.sort(key=lambda credit: credit.expires_at)
     return ResetCredits(_int(value.get("available")), credits, _int(value.get("read_at")))
 
@@ -128,6 +134,28 @@ def _manual_resets(value: Any) -> list[ManualReset]:
     return sorted(entries, key=lambda entry: entry.expires_at)
 
 
+def _weekly_resets(value: Any) -> list[WeeklyReset]:
+    if not isinstance(value, list):
+        raise ValueError("invalid weekly resets")
+    entries = []
+    for entry in value:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str)
+                or re.fullmatch(r"[0-9a-f]{12}", entry["id"]) is None
+                or not isinstance(entry.get("kind"), str) or entry["kind"] not in {"early", "credit"}):
+            raise ValueError("invalid weekly reset")
+        credits = entry.get("credits_before")
+        if credits is not None and not isinstance(credits, list):
+            raise ValueError("invalid weekly reset credits")
+        entries.append(WeeklyReset(
+            entry["id"], entry["kind"], _int(entry.get("from_at")), _int(entry.get("to_at")),
+            _percent(entry.get("before_used")), _int(entry.get("before_resets_at")),
+            _percent(entry.get("after_used")), _int(entry.get("after_resets_at")),
+            _bool(entry.get("dismissed", False)),
+            None if credits is None else [_reset_credit(credit) for credit in credits],
+        ))
+    return entries
+
+
 def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[str, ToolState]:
     """Load enabled tools, falling back to defaults for missing or corrupt data."""
     defaults = {
@@ -161,6 +189,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 auto_refresh=_auto_refresh(item.get("auto_refresh", {})),
                 last_read=_read_record(item.get("last_read")),
                 manual_resets=_manual_resets(item.get("manual_resets", [])),
+                weekly_resets=_weekly_resets(item.get("weekly_resets", [])),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
