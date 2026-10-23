@@ -49,7 +49,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
     @app.get("/api/state")
     async def get_state() -> dict[str, Any]:
         now = clock.now()
-        return {"dry_run": settings.dry_run, "server_time": now, "timezone": settings.timezone.key, "tools": {
+        return {"dry_run": settings.dry_run, "server_time": now, "timezone": settings.timezone.key, "delay_seconds": settings.delay_seconds, "tools": {
             name: serialize(state, now)
             for name, state in scheduler.states.items()
         }}

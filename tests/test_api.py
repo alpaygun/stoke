@@ -36,7 +36,7 @@ def test_state_shape_manual_result_health_and_page(
         response = client.get("/api/state")
         assert response.status_code == 200
         state = response.json()
-        assert set(state) == {"dry_run", "server_time", "timezone", "tools"}
+        assert set(state) == {"dry_run", "server_time", "timezone", "delay_seconds", "tools"}
         assert state["dry_run"] is True and state["server_time"] == 1000
         assert state["timezone"] == "Europe/Istanbul"
         tool = state["tools"]["claude"]
@@ -66,6 +66,14 @@ def test_state_shape_manual_result_health_and_page(
         assert page.status_code == 200 and "text/html" in page.headers["content-type"]
         assert "DRY RUN" in page.text and "setInterval(refresh, 5000)" in page.text
     assert not scheduler.tasks
+
+
+def test_state_exposes_configured_delay_seconds(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory(STOKE_DELAY_SECONDS="137")
+    with TestClient(create_app(make_scheduler(settings), settings)) as client:
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        assert response.json()["delay_seconds"] == 137
 
 
 @pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/api/tools/claude/refresh", "/api/tools/claude/plan", "/api/tools/claude/plan/cancel", "/unknown"])

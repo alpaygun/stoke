@@ -21,6 +21,11 @@
     .header, .card-heading { justify-content: space-between; }
     .brand { min-width: 0; }
     .header-tools { justify-content: flex-end; }
+    .gap-line { display: flex; align-items: baseline; flex-wrap: wrap; }
+    .gap-button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; cursor: pointer; }
+    .gap-button.ok { color: #7FD39A; }
+    .gap-button:hover, .gap-button:focus-visible { color: #F5A142; text-decoration: underline; }
+    .gap-sep { white-space: pre; }
     .mono { font-family: var(--mono); }
     .muted { color: var(--muted); }
     .small { font-size: 13px; line-height: 1.5; }
@@ -130,6 +135,18 @@
     .plan-form h2 { font-size: 22px; }
     .plan-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
     .plan-form legend { margin-bottom: 8px; color: #9AA3AD; font-size: 13px; }
+    .offset-now { font-size: 14px; line-height: 1.6; }
+    .offset-now .ok { color: #7FD39A; }
+    .offset-pick { display: flex; flex-direction: column; gap: 18px; }
+    .offset-who { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid #2C323A; border-radius: 10px; overflow: hidden; }
+    .offset-who button { min-height: 40px; border: 0; background: transparent; color: #C3C9D0; font-family: var(--mono); font-size: 14px; }
+    .offset-who button[aria-pressed="true"] { background: #F5A142; color: #1A1206; font-weight: 600; }
+    .offset-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .opt { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid #2C323A; border-radius: 10px; background: #1B1F24; color: inherit; text-align: left; }
+    .opt:hover:not(:disabled) { border-color: #F5A142; }
+    .opt-time { display: block; font-family: var(--mono); font-size: 18px; font-weight: 600; }
+    .opt-idle { display: block; font-size: 13px; color: #9AA3AD; }
+    .opt-action { flex: none; font-family: var(--mono); font-size: 13px; color: #F5A142; }
     .plan-form label { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
     .plan-form input { accent-color: #F5A142; }
     #plan-time { padding: 8px 12px; border: 1px solid #2C323A; border-radius: 8px; background: #0E1013; color: #E6E8EB; font-family: var(--mono); }
@@ -221,6 +238,21 @@
         <button id="plan-save" type="submit" class="stoke">Save</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="offset-dialog" aria-labelledby="offset-title">
+    <div class="plan-form">
+      <h2 id="offset-title">Offset windows</h2>
+      <p id="offset-now" class="offset-now"></p>
+      <section id="offset-pick" class="offset-pick">
+        <fieldset><legend>Who waits</legend><div id="offset-who" class="offset-who"></div></fieldset>
+        <fieldset>
+          <legend>Pick a start time · one tap sets a one-time plan</legend>
+          <div id="offset-options"></div>
+        </fieldset>
+      </section>
+      <p id="offset-error" class="small failed" role="status" hidden></p>
+      <div class="dialog-actions"><button id="offset-close" type="button" class="refresh">Close</button></div>
+    </div>
   </dialog>
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form" class="plan-form">
@@ -359,6 +391,10 @@
       if (hours) return `${hours}h ${pad(minutes)}m`;
       return `${minutes}m ${pad(seconds % 60)}s`;
     }
+    function dur(seconds) {
+      const minutes = Math.round(seconds / 60);
+      return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${pad(minutes % 60)} m`;
+    }
     function view(tool, current = now()) {
       const five = tool.five_hour, weekly = tool.weekly, last = tool.last_stoke;
       const open = !!tool.window_open;
@@ -456,7 +492,17 @@
       const header = el('header', 'header'), brand = el('div', 'brand');
       brand.append(icon('flame'), el('h1', '', 'stoke'), badge(currentState));
       const controls = el('div', 'header-tools');
-      controls.append(live(el('p', 'mono muted small'), 'dialClock'));
+      const clockLine = live(el('p', 'mono muted small'), 'dialClock'), gap = offsetGap(currentState);
+      if (gap) {
+        const line = el('div', 'gap-line mono muted small');
+        const button = el('button', `gap-button${gap.aligned ? ' ok' : ''}`, `${gap.aligned ? '✓' : '⇄'} Gap ${dur(gap.gap)}`);
+        button.setAttribute('type', 'button');
+        button.setAttribute('data-key', 'offset-open');
+        button.setAttribute('title', 'Offset windows');
+        button.addEventListener('click', openOffset);
+        line.append(button, el('span', 'gap-sep', ' · '), clockLine);
+        controls.append(line);
+      } else controls.append(clockLine);
       header.append(brand, controls);
       return header;
     }
@@ -583,6 +629,127 @@
       button.addEventListener('click', () => openPlan(tool.name, button.dataset.key));
       return button;
     }
+    const WINDOW = 5 * 3600, GOAL = 9000;
+    const offsetDialog = document.querySelector('#offset-dialog');
+    const offsetStatus = document.querySelector('#offset-now');
+    const offsetWho = document.querySelector('#offset-who');
+    const offsetOptions = document.querySelector('#offset-options');
+    const offsetError = document.querySelector('#offset-error');
+    let offsetWaiting = 'codex', offsetSaving = false;
+    let offsetStatusSignature = null, offsetWhoSignature = null, offsetOptionsSignature = null;
+    function offsetGap(currentState) {
+      const tools = currentState?.tools;
+      if (!tools || Object.keys(tools).length !== 2 || !tools.claude || !tools.codex) return null;
+      const a = tools.claude.five_hour?.resets_at, b = tools.codex.five_hour?.resets_at;
+      if (a == null || b == null) return null;
+      const delay = currentState.delay_seconds ?? 90, period = WINDOW + delay;
+      const d = Math.abs(a - b) % period, gap = Math.min(d, period - d);
+      return { gap, aligned: Math.abs(gap - GOAL) <= 600, delay, period };
+    }
+    function offsetTargets(waiting, other, delay, period, current = now()) {
+      const e0 = waiting.five_hour.resets_at, o0 = other.five_hour.resets_at + delay;
+      const options = [];
+      for (let k = 0; k < 10 && options.length < 5; k++) {
+        const T = Math.ceil((o0 + k * period + GOAL) / 60) * 60;
+        if (T < e0 || T <= current + 60 || T > current + 86400) continue;
+        let idle = e0;
+        // Only stokes before the plan's quiet zone can open another window.
+        for (let j = 0; e0 + j * period + delay < T - WINDOW; j++) idle = e0 + (j + 1) * period;
+        options.push({ T, idle });
+      }
+      return options;
+    }
+    function fillOffset() {
+      const gap = offsetGap(state);
+      if (!gap) { offsetDialog.close(); return; }
+      const { claude, codex } = state.tools;
+      const ends = `${claude.label} ends ${clock(claude.five_hour.resets_at)} · ${codex.label} ends ${clock(codex.five_hour.resets_at)}`;
+      const apart = gap.aligned ? `✓ ${dur(gap.gap)} apart — already offset, nothing to do` : `${dur(gap.gap)} apart · goal 2 h 30 m`;
+      const statusSignature = JSON.stringify([ends, apart, gap.aligned]);
+      if (statusSignature !== offsetStatusSignature) {
+        offsetStatus.replaceChildren(el('span', '', ends), el('br'), el('span', gap.aligned ? 'ok' : '', apart));
+        offsetStatusSignature = statusSignature;
+      }
+      document.querySelector('#offset-pick').hidden = gap.aligned;
+      if (gap.aligned) return;
+      const whoSignature = JSON.stringify([codex.label, claude.label]);
+      if (whoSignature !== offsetWhoSignature) {
+        offsetWho.replaceChildren();
+        ['codex', 'claude'].forEach(name => {
+          const button = el('button', '', state.tools[name].label);
+          button.setAttribute('type', 'button');
+          button.setAttribute('data-waiting', name);
+          button.addEventListener('click', () => {
+            if (offsetSaving) return;
+            offsetWaiting = name;
+            offsetError.hidden = true;
+            fillOffset();
+          });
+          offsetWho.append(button);
+        });
+        offsetWhoSignature = whoSignature;
+      }
+      offsetWho.querySelectorAll('button').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.waiting === offsetWaiting));
+      });
+      const waiting = state.tools[offsetWaiting], other = state.tools[offsetWaiting === 'codex' ? 'claude' : 'codex'];
+      const blocked = !waiting.auto_stoke || !other.auto_stoke ? 'Turn auto-stoke on for both tools first.'
+        : other.plan ? `${other.label} has a plan; remove it first.` : '';
+      const current = now();
+      const options = blocked ? [] : offsetTargets(waiting, other, gap.delay, gap.period, current);
+      const rows = options.map(({ T, idle }) => ({ T, time: when(T, current), idle: `${waiting.label} idle ${clock(idle)}–${clock(T)} (${dur(T - idle)})` }));
+      const optionsSignature = JSON.stringify([offsetWaiting, blocked, rows]);
+      if (optionsSignature !== offsetOptionsSignature) {
+        offsetOptions.replaceChildren();
+        if (blocked || !rows.length) offsetOptions.append(el('p', 'small muted', blocked || 'No start time in the next 24 hours.'));
+        else {
+          const list = el('ul', 'offset-options');
+          rows.forEach(row => {
+            const item = el('li'), button = el('button', 'opt'), copy = el('span');
+            button.setAttribute('type', 'button');
+            copy.append(el('span', 'opt-time', row.time), el('span', 'opt-idle', row.idle));
+            button.append(copy, el('span', 'opt-action', 'Set plan →'));
+            button.addEventListener('click', () => setOffsetPlan(row.T));
+            item.append(button);
+            list.append(item);
+          });
+          offsetOptions.append(list);
+        }
+        offsetOptionsSignature = optionsSignature;
+      }
+      syncOffsetSaving();
+    }
+    function syncOffsetSaving() {
+      offsetDialog.querySelectorAll('.opt, .offset-who button').forEach(button => { button.disabled = offsetSaving; });
+    }
+    function openOffset() {
+      if (offsetSaving || !offsetGap(state)) return;
+      offsetWaiting = 'codex';
+      offsetError.hidden = true;
+      offsetError.textContent = '';
+      fillOffset();
+      offsetDialog.showModal();
+    }
+    async function setOffsetPlan(target) {
+      if (offsetSaving) return;
+      const name = offsetWaiting;
+      offsetSaving = true;
+      offsetError.hidden = true;
+      syncOffsetSaving();
+      try {
+        await post(name, 'plan', { time: clock(target), repeat: 'once', auto_after: null });
+        await refresh();
+        offsetDialog.close();
+      } catch (failure) {
+        offsetError.textContent = failure.message;
+        offsetError.hidden = false;
+      } finally {
+        offsetSaving = false;
+        syncOffsetSaving();
+      }
+    }
+    document.querySelector('#offset-close').addEventListener('click', () => offsetDialog.close());
+    offsetDialog.addEventListener('close', () => restoreFocus('offset-open'));
     function planRow(tool, current = now()) {
       const row = el('div', 'plan-row'), plan = tool.plan;
       if (plan) {
@@ -1053,6 +1220,7 @@
       if (infoDialog.open && state.tools[infoTool]) {
         document.querySelector('#info-body').replaceChildren(...infoContent(view(state.tools[infoTool])));
       }
+      if (offsetDialog.open) fillOffset();
       tick();
       restoreFocus(focusKey);
     }
