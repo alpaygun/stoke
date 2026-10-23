@@ -23,7 +23,7 @@ def test_defaults_and_frozen_environment_snapshot() -> None:
     assert settings.host == "0.0.0.0" and settings.port == 8787
     assert settings.dry_run_window_seconds == 18000 and settings.dry_run_fail == ()
     assert settings.codex_home == Path("/home/stoke/.codex")
-    assert settings.timezone.key == "Europe/Istanbul"
+    assert settings.timezone.key == "UTC"
     assert "synthetic-secret" not in repr(settings)
     source["CLAUDE_CODE_OAUTH_TOKEN"] = "changed"
     assert settings.process_env["CLAUDE_CODE_OAUTH_TOKEN"] == "synthetic-secret"

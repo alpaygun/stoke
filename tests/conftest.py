@@ -77,6 +77,8 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "STOKE_DATA_DIR": str(tmp_path / "data"),
             "CODEX_HOME": str(tmp_path / "codex-home"),
             "STOKE_AUTO_DEFAULT": "0",
+            # Local-time expectations are written for this zone, independent of the default.
+            "STOKE_TIMEZONE": "Europe/Istanbul",
             **overrides,
         })
     return create

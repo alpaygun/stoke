@@ -101,7 +101,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
     if port > 65535:
         raise ValueError("STOKE_PORT must be at most 65535")
     try:
-        timezone = ZoneInfo(env.get("STOKE_TIMEZONE", "Europe/Istanbul"))
+        timezone = ZoneInfo(env.get("STOKE_TIMEZONE", "UTC"))
     except (ZoneInfoNotFoundError, ValueError):
         raise ValueError("STOKE_TIMEZONE must be a valid IANA time zone") from None
     expiry = env.get("STOKE_CLAUDE_TOKEN_EXPIRES", "")
