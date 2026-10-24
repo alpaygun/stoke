@@ -237,8 +237,7 @@
     .opt-action { flex: none; font-family: var(--mono); font-size: 13px; color: var(--accent-ink); }
     .plan-form label { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
     .plan-form input { accent-color: var(--accent); }
-    #plan-time { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); }
-    #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
+    #plan-block { overflow-wrap: anywhere; }
     .dialog-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 24px; border-top: 1px solid var(--line); }
     .dialog-actions .stoke, .dialog-actions .refresh { position: relative; min-height: 36px; height: 36px; padding: 0 18px; }
     .dialog-actions .stoke::after, .dialog-actions .refresh::after { content: ""; position: absolute; inset: -4px 0; }
@@ -250,8 +249,9 @@
 
     .reset-item .text-button { min-height: 24px; margin-block: -4px; font-size: 12px; }
     .reset-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
-    .reset-expiry { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+    .reset-expiry { display: flex; flex: 1; gap: 10px; min-width: 0; }
     .reset-expiry .field { min-width: 0; max-width: 100%; }
+    #reset-date { flex: 1; min-width: 0; }
     .reset-actions { grid-column: 2; grid-row: 1; display: flex; gap: 12px; }
     .status-ok { color: var(--text-2); }
     .status-warn { color: var(--accent-ink); }
@@ -259,7 +259,7 @@
     .field { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
     .field.num { width: 56px; text-align: center; }
     .field:disabled { color: var(--text-4); }
-    #settings-dialog .dialog-body { gap: 12px; }
+    #settings-dialog .dialog-body, #plan-dialog .dialog-body, #reset-dialog .dialog-body { gap: 12px; }
     .settings-box { border-radius: var(--radius-box); background: var(--surface-2); }
     .settings-row { display: flex; align-items: center; min-height: 56px; gap: 12px; padding: 12px 14px; }
     .settings-tile { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); }
@@ -269,7 +269,17 @@
     .settings-copy span { font-size: 13px; color: var(--text-3); }
     .settings-row .switch { flex: none; margin: 0; cursor: pointer; }
     .settings-row .switch:disabled { cursor: default; }
-    .settings-interval { border-top: 1px solid var(--line); }
+    .settings-box .settings-row + .settings-row, #plan-tools > .settings-row, .settings-interval { border-top: 1px solid var(--line); }
+    .settings-sub { min-height: 48px; padding: 8px 14px; }
+    .settings-sub > strong { flex: 1; font-weight: 500; }
+    .plan-form label.plan-tool { min-height: 52px; gap: 12px; padding: 8px 14px; cursor: pointer; }
+    .segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 3px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); flex: 1; }
+    .segmented.fit { flex: none; }
+    .plan-form .segmented label { position: relative; justify-content: center; min-height: 30px; padding: 0 12px; border-radius: 6px; color: var(--text-2); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; gap: 0; }
+    .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+    .segmented label:has(input:checked) { background: var(--accent); color: var(--on-accent); }
+    .segmented label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .segmented label:has(input:disabled) { opacity: .55; cursor: default; }
     .settings-interval.dimmed { opacity: .45; }
     .settings-clock { display: flex; justify-content: center; width: 20px; flex: none; color: var(--text-3); }
     .settings-clock .ic { width: 20px; height: 20px; }
@@ -282,6 +292,10 @@
     .settings-stepper span { padding: 0 6px; font-size: 13px; color: var(--text-2); }
     .settings-caution { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--caution-soft); color: var(--caution-text); font-size: 13px; line-height: 1.5; }
     .settings-caution .ic { margin-top: 2px; color: var(--accent-ink); }
+    .settings-caution.danger { background: var(--danger-soft); color: var(--danger-text); }
+    .settings-caution.danger .ic { color: var(--danger-ink); }
+    .settings-caution p { margin: 0; color: inherit; font-size: inherit; white-space: pre-line; }
+    .settings-caution:has(> [hidden]) { display: none; }
     .setting-section { display: flex; flex-direction: column; gap: 10px; }
     .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
     .signin-rows { display: flex; flex-direction: column; gap: 8px; }
@@ -415,21 +429,42 @@
       </div>
       <div class="dialog-body">
         <p id="plan-outcome" class="small status-warn" hidden></p>
-        <fieldset><legend>Tools</legend><div id="plan-tools"></div></fieldset>
-        <label for="plan-time">Local time <input id="plan-time" type="time" value="07:00" required></label>
-        <fieldset>
-          <legend>Repeat</legend>
-          <label><input type="radio" name="repeat" value="once" checked> Once</label>
-          <label><input type="radio" name="repeat" value="daily"> Every day</label>
-        </fieldset>
-        <fieldset>
-          <legend>After the planned stoke</legend>
-          <label><input type="radio" name="auto_after" value="keep" checked> Keep auto-stoke as is</label>
-          <label><input type="radio" name="auto_after" value="on"> Turn auto-stoke on</label>
-          <label><input type="radio" name="auto_after" value="off"> Turn auto-stoke off</label>
-        </fieldset>
-        <p id="plan-hint" class="small muted"></p>
-        <p id="plan-block" class="small failed" role="status" hidden></p>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="check"></span>
+            <div class="settings-copy"><strong>Tools</strong><span>Plan one or both</span></div>
+          </div>
+          <div id="plan-tools"></div>
+        </section>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="clock"></span>
+            <div class="settings-copy"><strong>Start at</strong><span id="plan-timezone">UTC</span></div>
+            <input id="plan-time" class="field" type="time" value="07:00" aria-label="Start at" required>
+          </div>
+          <div class="settings-row settings-sub">
+            <span class="settings-clock" data-settings-icon="cycle"></span><strong>Repeat</strong>
+            <div class="segmented fit" role="radiogroup" aria-label="Repeat">
+              <label><input type="radio" name="repeat" value="once" checked> Once</label>
+              <label><input type="radio" name="repeat" value="daily"> Every day</label>
+            </div>
+          </div>
+        </section>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="flame"></span>
+            <div class="settings-copy"><strong>Afterwards</strong><span>Auto-stoke after the planned stoke</span></div>
+          </div>
+          <div class="settings-row settings-sub">
+            <div class="segmented" role="radiogroup" aria-label="Afterwards">
+              <label><input type="radio" name="auto_after" value="keep" checked> Keep as is</label>
+              <label><input type="radio" name="auto_after" value="on"> Turn on</label>
+              <label><input type="radio" name="auto_after" value="off"> Turn off</label>
+            </div>
+          </div>
+        </section>
+        <div class="settings-caution"><span data-settings-icon="info"></span><p id="plan-hint"></p></div>
+        <div class="settings-caution danger"><span data-settings-icon="warning"></span><p id="plan-block" role="status" hidden></p></div>
       </div>
       <div class="dialog-actions">
         <button id="plan-remove" type="button" class="text-button" hidden>Remove plan</button>
@@ -525,19 +560,31 @@
         <button id="reset-close" type="button" class="dialog-x" aria-label="Close"></button>
       </div>
       <div class="dialog-body">
-        <fieldset>
-          <legend>Type</legend>
-          <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
-          <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
-        </fieldset>
-        <fieldset>
-          <legend>Expires</legend>
-          <div class="reset-expiry">
-            <input id="reset-date" class="field" type="date" aria-label="Date" required>
-            <input type="time" id="reset-time" class="field" aria-label="Time" value="23:59" required>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="undo"></span>
+            <div class="settings-copy"><strong>Type</strong><span>As shown in Claude</span></div>
           </div>
-        </fieldset>
-        <p class="small muted">Copy the date and time from Claude → Settings → Usage → Limit resets. Keep 23:59 if no time is shown. Stoke can't read Claude's resets: remove it here after you use it.</p>
+          <div class="settings-row settings-sub">
+            <div class="segmented" role="radiogroup" aria-label="Type">
+              <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
+              <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
+            </div>
+          </div>
+        </section>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="clock"></span>
+            <div class="settings-copy"><strong>Expires</strong><span id="reset-timezone">Local time · UTC</span></div>
+          </div>
+          <div class="settings-row settings-sub">
+            <div class="reset-expiry">
+              <input id="reset-date" class="field" type="date" aria-label="Date" required>
+              <input type="time" id="reset-time" class="field" aria-label="Time" value="23:59" required>
+            </div>
+          </div>
+        </section>
+        <div class="settings-caution"><span data-settings-icon="info"></span><p>Copy it from Claude → Settings → Usage → Limit resets; keep 23:59 if no time is shown. Stoke can't see when you use it, so remove it here afterwards.</p></div>
       </div>
       <div class="dialog-actions">
         <button id="reset-save" type="submit" class="stoke">Add</button>
@@ -1146,6 +1193,13 @@
       document.querySelector('#plan-hint').textContent = value ? `No auto-stoke from ${pad(Math.floor(from / 60))}:${pad(from % 60)} until ${value}. (${state?.timezone ?? 'UTC'})` : '';
       updatePlanSave();
     }
+    function syncPlanStatus() {
+      document.querySelector('#plan-timezone').textContent = state.timezone ?? 'UTC';
+      planTools.querySelectorAll('.plan-tool').forEach(row => {
+        const tool = state.tools[row.querySelector('input').value];
+        row.querySelector('.settings-copy span').textContent = tool.window_open && tool.five_hour?.resets_at != null ? `Window open until ${clock(tool.five_hour.resets_at)}` : 'Window closed';
+      });
+    }
     function openPlan(name, focusKey) {
       if (planSaving || busy.has(name)) return;
       const plan = state.tools[name].plan;
@@ -1163,15 +1217,17 @@
       planForm.querySelectorAll('[name="auto_after"]').forEach(input => { input.checked = input.value === after; });
       planTools.replaceChildren();
       Object.values(state.tools).forEach(tool => {
-        const label = el('label'), input = el('input');
+        const label = el('label', 'settings-row settings-sub plan-tool'), copy = el('div', 'settings-copy'), input = el('input', 'switch');
         input.setAttribute('type', 'checkbox');
         input.setAttribute('value', tool.name);
         input.checked = tool.name === name;
         input.addEventListener('change', updatePlanSave);
-        label.append(input, el('span', '', tool.label));
+        copy.append(el('strong', '', tool.label), el('span'));
+        label.append(copy, input);
         planTools.append(label);
       });
       planForm.querySelectorAll('input').forEach(input => { input.disabled = false; });
+      syncPlanStatus();
       updatePlanSave();
       syncPlanRemove();
       updatePlanHint();
@@ -1401,7 +1457,7 @@
     const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value');
     const arMinus = document.querySelector('#ar-minus'), arPlus = document.querySelector('#ar-plus');
     const settingsMessage = document.querySelector('#settings-message'), settingsSave = document.querySelector('#settings-save');
-    settingsDialog.querySelectorAll('[data-settings-icon]').forEach(slot => slot.append(icon(slot.dataset.settingsIcon, true)));
+    document.querySelectorAll('[data-settings-icon]').forEach(slot => slot.append(icon(slot.dataset.settingsIcon, true)));
     let settingsTool = null, settingsSaving = false;
     function arSeconds() { return Number(arValue.value) * 60; }
     function syncSettings() {
@@ -1486,6 +1542,7 @@
         document.querySelector('#reset-time').value = clock(credit.expires_at);
       }
       const label = state.tools[name].label;
+      document.querySelector('#reset-timezone').textContent = `Local time · ${state.timezone ?? 'UTC'}`;
       document.querySelector('#reset-title').textContent = credit ? `Edit ${label} limit reset` : `Add a ${label} limit reset`;
       document.querySelector('#reset-save').textContent = credit ? 'Save' : 'Add';
       dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
@@ -1556,7 +1613,7 @@
         if (control.dataset.action === 'refresh') control.querySelector('.button-label').textContent = refreshText(tool);
         if (control.tagName === 'INPUT' && !busy.has(tool.name)) control.checked = tool.auto_stoke;
       });
-      if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
+      if (planDialog.open) { syncPlanStatus(); syncPlanRemove(); updatePlanSave(); }
       if (!dialogOpen()) restoreFocus(deferredFocus);
     }
     function restoreFocus(key) {
@@ -1676,7 +1733,7 @@
       });
       const vm = Object.values(state?.tools ?? {}).map(tool => view(tool));
       app.replaceChildren(renderDial(state, vm));
-      if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
+      if (planDialog.open) { syncPlanStatus(); syncPlanRemove(); updatePlanSave(); }
       if (infoDialog.open && state.tools[infoTool]) {
         refillDialog(document.querySelector('#info-body'), infoContent(view(state.tools[infoTool])));
       }

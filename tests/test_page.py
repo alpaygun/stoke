@@ -195,15 +195,67 @@ def test_reset_rows_separate_expiry_and_remaining_time() -> None:
     assert "el('span', 'reset-left', `in ${span(left)}`)" in PAGE
 
 
+def test_plan_and_reset_settings_cards_and_segmented_choices() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+
+    def descendants(node: dict) -> list[dict]:
+        return [child for child in node["children"]] + [
+            item for child in node["children"] for item in descendants(child)
+        ]
+
+    groups = {}
+    for name, count in (("plan", 3), ("reset", 2)):
+        form, = page.by_id[f"{name}-dialog"]["children"]
+        _, body, _ = form["children"]
+        boxes = [node for node in body["children"] if node["attrs"].get("class") == "settings-box"]
+        assert len(boxes) == count
+        assert not any(node["tag"] in {"fieldset", "legend"} for node in descendants(body))
+        for node in descendants(body):
+            if "segmented" not in node["attrs"].get("class", "").split():
+                continue
+            assert node["tag"] == "div"
+            radios = []
+            for label in node["children"]:
+                assert label["tag"] == "label"
+                radio, = label["children"]
+                assert radio["tag"] == "input"
+                assert radio["attrs"]["type"] == "radio"
+                assert label["text"].strip()
+                radios.append(radio["attrs"])
+            group, = {radio["name"] for radio in radios}
+            groups[group] = radios
+    plan_form, = page.by_id["plan-dialog"]["children"]
+    _, plan_body, _ = plan_form["children"]
+    for control, classes in (("plan-hint", {"settings-caution"}),
+                             ("plan-block", {"settings-caution", "danger"})):
+        caution, = [node for node in plan_body["children"] if page.by_id[control] in node["children"]]
+        assert set(caution["attrs"]["class"].split()) == classes
+    assert set(groups) == {"repeat", "auto_after", "reset-type"}
+    for name, values in (("repeat", ["once", "daily"]),
+                         ("auto_after", ["keep", "on", "off"]),
+                         ("reset-type", ["Full reset", "5-hour reset"])):
+        assert [radio["value"] for radio in groups[name]] == values
+        assert [radio["value"] for radio in groups[name] if "checked" in radio] == values[:1]
+    assert page.by_id["plan-block"]["attrs"]["role"] == "status"
+    assert "hidden" in page.by_id["plan-block"]["attrs"]
+    assert "document.querySelectorAll('[data-settings-icon]')" in PAGE
+
+
 def test_manual_reset_time_and_edit_dialog() -> None:
     page = ElementParser()
     page.feed(PAGE)
     form, = page.by_id["reset-dialog"]["children"]
     _, body, _ = form["children"]
-    expiry, = [child for child in body["children"] if any(
-        node["tag"] == "legend" and node["text"] == "Expires" for node in child["children"]
-    )]
-    _, row = expiry["children"]
+    _, expiry, _ = body["children"]
+    assert expiry["attrs"]["class"] == "settings-box"
+    head, sub = expiry["children"]
+    _, copy = head["children"]
+    title, timezone = copy["children"]
+    assert title["tag"] == "strong" and title["text"] == "Expires"
+    assert timezone["attrs"]["id"] == "reset-timezone"
+    assert "settings-sub" in sub["attrs"]["class"].split()
+    row, = sub["children"]
     assert row["attrs"]["class"] == "reset-expiry"
     assert [child["attrs"]["id"] for child in row["children"]] == ["reset-date", "reset-time"]
     for name, label, kind in (("reset-date", "Date", "date"), ("reset-time", "Time", "time")):
