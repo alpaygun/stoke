@@ -96,4 +96,4 @@ def test_theme_initialises_in_head() -> None:
 
 def test_no_html_injection_or_text_icons() -> None:
     assert not re.search(r"innerHTML|outerHTML|insertAdjacentHTML", PAGE)
-    assert not any(glyph in PAGE for glyph in "↻✎⚠↺")
+    assert not any(glyph in PAGE for glyph in "↻✎⚠↺×")

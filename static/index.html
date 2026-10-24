@@ -254,7 +254,7 @@
     .note-line .note-icon { flex: none; color: var(--ok); }
     .note-line button { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; }
     .note-line .note-text { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; }
-    .note-line .note-dismiss { flex: none; width: 36px; height: 36px; font-size: 20px; }
+    .note-line .note-dismiss { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; }
     .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--danger-ink); vertical-align: middle; }
     .dot.caution { background: var(--accent-ink); }
     .heading-tools { display: flex; align-items: center; gap: 4px; flex: none; }
@@ -1156,7 +1156,8 @@
       text.setAttribute('type', 'button');
       text.setAttribute('data-key', `${tool.name}:weekly-info:${entry.id}`);
       text.addEventListener('click', () => openInfo(tool.name));
-      const dismiss = el('button', 'note-dismiss', '×');
+      const dismiss = el('button', 'note-dismiss');
+      dismiss.append(icon('cross'));
       dismiss.setAttribute('type', 'button');
       dismiss.setAttribute('aria-label', 'Dismiss');
       dismiss.setAttribute('data-key', `${tool.name}:weekly-dismiss:${entry.id}`);
