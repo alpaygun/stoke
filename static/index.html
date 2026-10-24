@@ -127,6 +127,17 @@
     .stat { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
     .warning, #error { font-size: 14px; line-height: 1.45; }
     #error { border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); padding: 12px 14px; border-radius: var(--radius-box); }
+    #toast { position: fixed; inset: auto; top: calc(16px + env(safe-area-inset-top, 0px)); left: 50%; transform: translate(-50%, 0); margin: 0; width: max-content; max-width: min(420px, calc(100vw - 32px)); min-height: 44px; padding: 10px 16px 10px 14px; border: 1px solid var(--ok-line); border-radius: 14px; background: var(--surface); color: var(--text); font-size: 14px; line-height: 1.4; white-space: pre-line; overflow-wrap: anywhere; box-shadow: 0 16px 40px var(--popover-shadow-colour); }
+    #toast:popover-open { display: flex; align-items: center; gap: 10px; animation: toast-in .18s ease-out; }
+    #toast > .ic { color: var(--ok); }
+    #toast > span { min-width: 0; }
+    #toast.fail { padding-right: 10px; background: var(--danger-soft); color: var(--danger-text); border-color: var(--danger-line); }
+    #toast.fail > .ic { color: var(--danger-ink); }
+    #toast .dialog-x { width: 32px; height: 32px; color: inherit; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translate(-50%, -8px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
     .track { overflow: hidden; background: var(--track); border-radius: var(--radius-sm); }
     .fill { height: 100%; border-radius: var(--radius-sm); background: var(--accent); }
 
@@ -223,8 +234,7 @@
     .plan-form label { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
     .plan-form input { accent-color: var(--accent); }
     #plan-time { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); }
-    #plan-message, #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
-    #plan-message.failed { color: var(--danger-text); }
+    #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
     .dialog-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 24px; border-top: 1px solid var(--line); }
     .dialog-actions .stoke, .dialog-actions .refresh { position: relative; min-height: 36px; height: 36px; padding: 0 18px; }
     .dialog-actions .stoke::after, .dialog-actions .refresh::after { content: ""; position: absolute; inset: -4px 0; }
@@ -366,6 +376,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after { transition: none; }
+      #toast:popover-open { animation: none; }
     }
   </style>
 
@@ -389,6 +400,7 @@
 <body>
   <p id="error" role="alert" hidden></p>
   <div id="app"></div>
+  <div id="toast" popover="manual"></div>
   <dialog id="plan-dialog" aria-labelledby="plan-title">
     <form id="plan-form" class="plan-form">
       <div class="dialog-head">
@@ -412,7 +424,6 @@
         </fieldset>
         <p id="plan-hint" class="small muted"></p>
         <p id="plan-block" class="small failed" role="status" hidden></p>
-        <p id="plan-message" class="small" role="status" hidden></p>
       </div>
       <div class="dialog-actions">
         <button id="plan-remove" type="button" class="text-button" hidden>Remove plan</button>
@@ -435,7 +446,6 @@
             <div id="offset-options"></div>
           </fieldset>
         </section>
-        <p id="offset-error" class="small failed" role="status" hidden></p>
       </div>
     </div>
   </dialog>
@@ -515,7 +525,6 @@
           <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
         </fieldset>
         <label for="reset-date">Expires on <input id="reset-date" class="field" type="date" required></label>
-        <p id="reset-message" class="small failed" role="status" hidden></p>
         <p class="small muted">Copy it from Claude → Settings → Usage → Limit resets. Stoke can't read Claude's resets: remove it here after you use it.</p>
       </div>
       <div class="dialog-actions">
@@ -535,7 +544,6 @@
     const planTime = document.querySelector('#plan-time');
     const planSave = document.querySelector('#plan-save');
     const planRemove = document.querySelector('#plan-remove');
-    const planMessage = document.querySelector('#plan-message');
     const planBlock = document.querySelector('#plan-block');
     const busy = new Set();
     const inFlightActions = new Map();
@@ -717,8 +725,45 @@
       return image;
     }
     document.querySelectorAll('.dialog-x').forEach(button => button.append(icon('cross')));
+    const toastBox = document.querySelector('#toast');
+    let toastTimer = null, toastVisible = false;
+    function hideToast() {
+      clearTimeout(toastTimer);
+      toastTimer = null;
+      toastVisible = false;
+      toastBox.hidePopover();
+    }
+    function raiseToast() {
+      toastBox.hidePopover();
+      // A popover outside the active modal is visible but inert.
+      const dialog = Array.from(document.querySelectorAll('dialog[open]')).at(-1);
+      (dialog ?? document.body).append(toastBox);
+      toastBox.showPopover();
+    }
+    function toast(kind, message) {
+      hideToast();
+      const failed = kind === 'fail';
+      toastBox.setAttribute('class', failed ? 'fail' : '');
+      toastBox.setAttribute('role', failed ? 'alert' : 'status');
+      toastBox.replaceChildren(icon(failed ? 'warning' : 'check'), el('span', '', message));
+      if (failed) {
+        const dismiss = el('button', 'dialog-x');
+        dismiss.setAttribute('type', 'button');
+        dismiss.setAttribute('aria-label', 'Dismiss');
+        dismiss.append(icon('cross'));
+        dismiss.addEventListener('click', hideToast);
+        toastBox.append(dismiss);
+      }
+      raiseToast();
+      toastVisible = true;
+      if (!failed) toastTimer = setTimeout(hideToast, 2500);
+    }
+    document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => {
+      if (toastVisible && toastBox.parentElement === dialog) raiseToast();
+    }));
     function openDialog(dialog) {
       dialog.showModal();
+      if (toastVisible) raiseToast();
       dialog.querySelector('.dialog-x').focus({ preventScroll: true });
       dialog.querySelector('.dialog-body').scrollTop = 0;
       dialog.scrollTop = 0;
@@ -901,7 +946,6 @@
     const offsetStatus = document.querySelector('#offset-now');
     const offsetWho = document.querySelector('#offset-who');
     const offsetOptions = document.querySelector('#offset-options');
-    const offsetError = document.querySelector('#offset-error');
     let offsetWaiting = 'codex', offsetSaving = false;
     let offsetStatusSignature = null, offsetWhoSignature = null, offsetOptionsSignature = null;
     function offsetGap(currentState) {
@@ -951,7 +995,6 @@
           button.addEventListener('click', () => {
             if (offsetSaving) return;
             offsetWaiting = name;
-            offsetError.hidden = true;
             fillOffset();
           });
           offsetWho.append(button);
@@ -996,24 +1039,21 @@
     function openOffset() {
       if (offsetSaving || !offsetGap(state)) return;
       offsetWaiting = 'codex';
-      offsetError.hidden = true;
-      offsetError.textContent = '';
       fillOffset();
       openDialog(offsetDialog);
     }
     async function setOffsetPlan(target) {
       if (offsetSaving) return;
-      const name = offsetWaiting;
+      const name = offsetWaiting, label = state.tools[name].label;
       offsetSaving = true;
-      offsetError.hidden = true;
       syncOffsetSaving();
       try {
         await post(name, 'plan', { time: clock(target), repeat: 'once', auto_after: null });
         await refresh();
         offsetDialog.close();
+        toast('ok', `Plan set · ${label} at ${clock(target)}`);
       } catch (failure) {
-        offsetError.textContent = failure.message;
-        offsetError.hidden = false;
+        toast('fail', `Couldn't set the plan: ${failure.message}`);
       } finally {
         offsetSaving = false;
         syncOffsetSaving();
@@ -1078,11 +1118,6 @@
       updatePlanSave();
       syncPlanRemove();
     }
-    function showPlanMessage(message, failed) {
-      planMessage.textContent = message;
-      planMessage.setAttribute('class', `small${failed ? ' failed' : ''}`);
-      planMessage.hidden = false;
-    }
     function updatePlanHint() {
       const value = planTime.value;
       const [hours, minutes] = value.split(':').map(Number);
@@ -1101,8 +1136,6 @@
       planSaving = false;
       planSave.hidden = false;
       planSave.textContent = 'Save';
-      planMessage.hidden = true;
-      planMessage.textContent = '';
       planTime.value = plan?.time ?? '07:00';
       planForm.querySelectorAll('[name="repeat"]').forEach(input => { input.checked = input.value === (plan?.repeat ?? 'once'); });
       const after = plan?.auto_after == null ? 'keep' : plan.auto_after ? 'on' : 'off';
@@ -1134,8 +1167,9 @@
         await post(name, 'plan/cancel');
         await refresh();
         planDialog.close();
+        toast('ok', 'Plan cancelled');
       } catch (failure) {
-        showPlanMessage(failure.message, true);
+        toast('fail', `Couldn't cancel the plan: ${failure.message}`);
       } finally {
         setPlanSaving(false);
         if (planDialog.open) (planRemove.hidden ? document.querySelector('#plan-close') : planRemove).focus();
@@ -1148,21 +1182,25 @@
       const time = planTime.value, repeat = planForm.querySelector('[name="repeat"]:checked').value;
       const after = planForm.querySelector('[name="auto_after"]:checked').value;
       const body = { time, repeat, auto_after: after === 'keep' ? null : after === 'on' };
-      const failures = [];
+      const failures = [], okLabels = [];
       setPlanSaving(true);
       planSave.textContent = 'Saving…';
       for (const name of names) {
         try {
           await post(name, 'plan', body);
+          okLabels.push(state.tools[name].label);
         } catch (failure) { failures.push(`${state.tools[name].label}: ${failure.message}`); }
       }
       await refresh();
       setPlanSaving(false);
       planSave.textContent = 'Save';
       if (failures.length) {
-        showPlanMessage(failures.join('\n'), true);
+        toast('fail', `Couldn't set the plan:\n${failures.join('\n')}${okLabels.length ? `\nSaved for ${okLabels.join(' and ')}.` : ''}`);
         planSave.focus();
-      } else planDialog.close();
+      } else {
+        planDialog.close();
+        toast('ok', `Plan set · ${okLabels.join(' and ')} at ${time}`);
+      }
     });
     function readStatus(record, current) {
       if (!record) return 'not read yet';
@@ -1345,7 +1383,7 @@
     settingsDialog.querySelectorAll('[data-settings-icon]').forEach(slot => slot.append(icon(slot.dataset.settingsIcon, true)));
     let settingsTool = null, settingsSaving = false;
     function arSeconds() { return Number(arValue.value) * 60; }
-    function syncSettings(showValidation = true) {
+    function syncSettings() {
       const seconds = arSeconds();
       const bad = !arBox.hidden && (!/^\d{1,2}$/.test(arValue.value) || seconds < 60 || seconds > 3600);
       const disabled = settingsSaving || arBox.hidden || !arEnabled.checked;
@@ -1357,10 +1395,8 @@
       document.querySelector('#ar-interval').classList.toggle('dimmed', !arEnabled.checked);
       settingsSave.disabled = settingsSaving || bad;
       document.querySelector('#settings-close').disabled = settingsSaving;
-      if (showValidation) {
-        settingsMessage.textContent = bad ? 'Enter 1 to 60 minutes.' : '';
-        settingsMessage.hidden = !bad;
-      }
+      settingsMessage.textContent = bad ? 'Enter 1 to 60 minutes.' : '';
+      settingsMessage.hidden = !bad;
     }
     function openSettings(name) {
       if (settingsSaving) return;
@@ -1402,27 +1438,25 @@
       try {
         if (autoChanged) await post(name, 'auto', { enabled });
         if (arChanged) await post(name, 'auto-refresh', body);
-        showError('');
         settingsDialog.close();
+        toast('ok', `${tool.label} settings saved`);
       } catch (failure) {
-        settingsMessage.textContent = failure.message;
-        settingsMessage.hidden = false;
+        toast('fail', `Couldn't save ${tool.label} settings: ${failure.message}`);
       } finally {
         await refresh();
         busy.delete(name);
         settingsSaving = false;
-        syncSettings(false);
+        syncSettings();
         syncControls();
       }
     });
     const resetDialog = document.querySelector('#reset-dialog');
-    const resetForm = document.querySelector('#reset-form'), resetMessage = document.querySelector('#reset-message');
+    const resetForm = document.querySelector('#reset-form');
     let resetTool = null, resetSaving = false;
     function openReset(name) {
       if (resetSaving) return;
       resetTool = name;
       resetForm.reset();
-      resetMessage.hidden = true;
       document.querySelector('#reset-title').textContent = `Add a ${state.tools[name].label} limit reset`;
       dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
       openDialog(resetDialog);
@@ -1434,14 +1468,13 @@
       const body = { title: resetForm.querySelector('[name="reset-type"]:checked').value, expires_on: document.querySelector('#reset-date').value };
       resetSaving = true;
       resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = true; });
-      resetMessage.hidden = true;
       try {
         await post(resetTool, 'resets', body);
         await refresh();
         resetDialog.close();
+        toast('ok', 'Reset added');
       } catch (failure) {
-        resetMessage.textContent = failure.message;
-        resetMessage.hidden = false;
+        toast('fail', `Couldn't add the reset: ${failure.message}`);
       } finally {
         resetSaving = false;
         resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = false; });
@@ -1549,12 +1582,14 @@
     }
     async function act(name, action, body) {
       if (busy.has(name) || (action === 'refresh' && !state?.tools[name]?.refreshable)) return;
+      const label = state.tools[name].label;
       deferredFocus = action === 'resets/remove' ? `${name}:resets` : document.activeElement?.dataset?.key ?? null;
       busy.add(name);
       inFlightActions.set(name, action);
       syncControls();
       try {
-        try { await post(name, action, body); }
+        let result;
+        try { result = await post(name, action, body); }
         catch (failure) {
           if (action !== 'stoke' || failure.status !== 409 || failure.code !== 'plan_conflict') throw failure;
           await refresh();
@@ -1562,11 +1597,20 @@
           let message = `Stoke ${tool.label} now? Its window would still be open at ${clock(failure.plan_target_at)}, so today's plan is skipped.`;
           message += plan?.repeat === 'daily' ? ' The daily plan continues tomorrow.' : ' The one-time plan is cancelled.';
           if (plan?.repeat === 'once' && plan.auto_after === true && !tool.auto_stoke) message += ' Auto-stoke stays off.';
-          if (window.confirm(message)) await post(name, action, { break_plan: true });
+          if (!window.confirm(message)) return;
+          result = await post(name, action, { break_plan: true });
         }
-        showError('');
+        if (action === 'stoke') {
+          const last = result.last_stoke;
+          if (last?.ok) toast('ok', `${label} stoked`);
+          else toast('fail', `${label} stoke failed: ${last?.error || 'unknown error'}`);
+        } else if (action === 'refresh') toast('ok', `${label} usage updated`);
+        else if (action === 'resets/remove') toast('ok', 'Reset removed');
       } catch (failure) {
-        showError(failure.message);
+        const context = action === 'stoke' ? `Couldn't stoke ${label}`
+          : action === 'refresh' ? `Couldn't read ${label} usage`
+          : action === 'resets/remove' ? "Couldn't remove the reset" : "Couldn't dismiss";
+        toast('fail', `${context}: ${failure.message}`);
       } finally {
         await refresh();
         busy.delete(name);

@@ -186,3 +186,43 @@ def test_settings_controls_and_no_card_menu() -> None:
     assert "settings-message" in controls
     assert "ar-hint" not in page.by_id
     assert not re.search(r"more-menu|menu-pop|menu-separator|moreMenu|autoControl", PAGE)
+
+
+def test_toast_is_a_manual_popover_outside_app() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    toast = page.by_id["toast"]
+    assert toast["tag"] == "div"
+    assert toast["attrs"]["popover"] == "manual"
+    html, = page.root["children"]
+    body, = [node for node in html["children"] if node["tag"] == "body"]
+    assert toast in body["children"]
+
+
+def test_failure_toast_has_accessible_dismiss_and_no_timer() -> None:
+    helper = re.search(r"function toast\(kind, message\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    code = helper[1]
+    assert "hideToast();" in code
+    assert "setAttribute('role', failed ? 'alert' : 'status')" in code
+    assert "icon(failed ? 'warning' : 'check')" in code
+    assert re.search(r"if \(failed\) \{.*?el\('button', 'dialog-x'\).*?"
+                     r"setAttribute\('aria-label', 'Dismiss'\).*?append\(icon\('cross'\)\).*?"
+                     r"addEventListener\('click', hideToast\)", code, re.DOTALL)
+    assert "if (!failed) toastTimer = setTimeout(hideToast, 2500);" in code
+    assert "raiseToast();" in code
+    assert re.search(r"function hideToast\(\).*?clearTimeout\(toastTimer\).*?"
+                     r"toastBox.hidePopover\(\)", PAGE, re.DOTALL)
+
+
+def test_toast_stays_above_new_dialogs_and_actions_leave_error_bar_alone() -> None:
+    assert PAGE.count(".showModal()") == 1
+    assert re.search(r"dialog.showModal\(\);\s*if \(toastVisible\) raiseToast\(\);", PAGE)
+    assert re.search(r"function raiseToast\(\).*?hidePopover\(\).*?"
+                     r"querySelectorAll\('dialog\[open\]'\).*?append\(toastBox\).*?"
+                     r"showPopover\(\)", PAGE, re.DOTALL)
+    assert "if (toastVisible && toastBox.parentElement === dialog) raiseToast();" in PAGE
+    assert PAGE.count("showError(") == 3  # Definition and the two state-refresh paths.
+    assert "showError(`State unavailable: ${failure.message}`)" in PAGE
+    assert not re.search(r"plan-message|reset-message|offset-error|showPlanMessage", PAGE)
+    assert "settingsMessage.textContent = failure.message" not in PAGE
