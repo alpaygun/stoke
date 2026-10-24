@@ -1155,10 +1155,11 @@
       const auth = tool.auth, rows = [];
       const status = readStatus(tool.last_read, current), level = tool.last_read && !tool.last_read.ok ? 'bad' : 'ok';
       const readIcon = tool.last_read ? (tool.last_read.ok ? 'check' : 'cross') : null;
-      if (auth.shared) return [{ title: 'Stoking and reading usage', kind: auth.shared.label, status, level, icon: readIcon }];
+      if (auth.shared) return [{ title: 'Stoking + reading', kind: auth.shared.label, status, level, icon: readIcon }];
       if (auth.stoke) {
         const expires = auth.stoke.expires_at, left = expires - current, soon = expires != null && left < 30 * 86400;
-        const expiry = expires == null ? 'expiry not set' : `expires ${dateText(expires)} ${localDate(expires).year} · ${left <= 0 ? 'expired' : `in ${span(left)}`}`;
+        const day = expires == null ? null : localDate(expires);
+        const expiry = expires == null ? 'expiry not set' : `expires ${day.day} ${MONTHS[day.month - 1]} ${day.year}${soon ? ` · ${left <= 0 ? 'expired' : `in ${span(left)}`}` : ''}`;
         rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok', icon: soon ? 'warning' : null });
       }
       if (auth.read) rows.push({ title: 'Reading usage', kind: auth.read.label, status, level, icon: readIcon });

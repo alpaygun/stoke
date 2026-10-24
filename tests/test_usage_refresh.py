@@ -525,7 +525,7 @@ def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Setti
             assert tools["claude"]["refreshable"] and tools["claude"]["manual_resets_allowed"]
             assert tools["claude"]["warning"] == "token_expiring"
             assert tools["claude"]["auth"]["stoke"]["expires_at"] == settings.claude_token_expires
-            assert tools["codex"]["auth"] == {"shared": {"label": "ChatGPT login (device code)"}}
+            assert tools["codex"]["auth"] == {"shared": {"label": "ChatGPT login"}}
             assert tools["codex"]["warning"] is None and not tools["codex"]["manual_resets_allowed"]
             for action, body in (("auto-refresh", {"enabled": True, "seconds": 90}), ("resets", {"title": "Full reset", "expires_on": "2026-10-20"}), ("resets/remove", {"id": "unknown"})):
                 assert (await client.post(f"/api/tools/claude/{action}", json=body)).status_code == 403
