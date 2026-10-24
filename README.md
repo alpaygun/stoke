@@ -21,7 +21,7 @@ Stoke sends one tiny message (`hi`) through the official CLI the moment a window
 | Feature | What it does |
 |---|---|
 | **Automatic stokes** | One loop per tool: stoke, read the window's end time from the CLI's own output, wait until it ends (+90 s), repeat. Failures back off (1, 5, 15, 30, 60 min). |
-| **Panel** | One card per tool: time left in the window, 5-hour and weekly usage, last and next stoke, limit resets. Auto-stoke switch and **Stoke now** button per tool. Light and dark theme. |
+| **Panel** | One card per tool: time left in the window, 5-hour and weekly usage, last and next stoke, limit resets. Auto-stoke switch in **Settings** and **Stoke now** button per tool. Light and dark theme. |
 | **Usage without a message** | **Refresh usage** reads current usage without starting a window (Codex through `codex app-server`, Claude through a separate sign-in). Optional automatic refresh per tool (Settings). |
 | **Plans** | Start a tool's window at a chosen local time, once or every day. Automatic stokes pause in the 5 hours before that time so an earlier window does not run into it. |
 | **Window offset** | With both tools on, the header shows the gap between their windows and suggests one-click plans that move them 2.5 h apart, so one of them always resets soon. |
@@ -119,9 +119,10 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 
 ## Using the panel
 
-- The **Auto-stoke** switch in the card's **⋯ menu** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
-- **Refresh usage** reads usage without sending a message. **Settings** in the card's **⋯ menu** turns automatic refresh on (1 to 60 whole minutes).
-- **Info** in the card's **⋯ menu** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
+- **Settings** (sliders icon) and **Info** (info icon) are buttons in each card's header.
+- The **Auto-stoke** switch in the card's **Settings** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
+- **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (1 to 60 whole minutes).
+- **Info** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
 - **Limit resets** on the card opens the list of available resets.
 - **Plan a stoke** sets a start time. In the 5 hours before it, automatic stokes wait; a manual stoke asks before it skips the plan. A plan is refused if the current window would still be open at that time.
 - **Gap** in the header (both tools on auto) opens suggested start times that move the two windows 2.5 h apart.
@@ -131,7 +132,7 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 
 | Warning | Meaning | What to do |
 |---|---|---|
-| Auto-stoke stopped | The CLI kept reporting a reset time in the past, so auto-stoke switched itself off. | Switch auto-stoke on or press **Stoke now**. |
+| Auto-stoke stopped | The CLI kept reporting a reset time in the past, so auto-stoke switched itself off. | Switch auto-stoke on in **Settings** or press **Stoke now**. |
 | No new window opened | The stoke succeeded but the window did not restart. | Check that the subscription is active. If it keeps happening, the provider may have changed how CLI messages are billed. |
 | Limits unreadable | The CLI answered, but stoke could not read the limits from it. | Usually temporary. If it persists after a CLI update, open an issue. |
 | Stoke keeps failing | Three or more failures in a row; stoke keeps retrying with backoff. | `docker compose logs stoke` shows the error. Check the token or sign-in. |

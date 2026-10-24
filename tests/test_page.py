@@ -157,3 +157,32 @@ def test_dialog_layout_and_minutes_input() -> None:
             assert all(button["text"].strip() != "Close" for button in buttons)
         else:
             assert not footer
+
+
+def test_settings_controls_and_no_card_menu() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    form, = page.by_id["settings-dialog"]["children"]
+    _, body, _ = form["children"]
+
+    def descendants(node: dict) -> list[dict]:
+        return [child for child in node["children"]] + [
+            item for child in node["children"] for item in descendants(child)
+        ]
+
+    controls = {node["attrs"].get("id"): node for node in descendants(body)}
+    assert controls["auto-enabled"]["attrs"] == {
+        "id": "auto-enabled", "type": "checkbox", "class": "switch",
+        "aria-label": "Auto-stoke",
+    }
+    assert controls["ar-enabled"]["attrs"]["aria-label"] == "Read usage automatically"
+    refresh_controls = {node["attrs"].get("id") for node in descendants(controls["ar-box"])}
+    assert {"ar-enabled", "ar-value", "ar-minus", "ar-plus"} <= refresh_controls
+    for control, label in (("ar-minus", "Fewer minutes"), ("ar-plus", "More minutes")):
+        assert controls[control]["tag"] == "button"
+        assert controls[control]["attrs"]["type"] == "button"
+        assert controls[control]["attrs"]["aria-label"] == label
+    assert "settings-caution" in controls
+    assert "settings-message" in controls
+    assert "ar-hint" not in page.by_id
+    assert not re.search(r"more-menu|menu-pop|menu-separator|moreMenu|autoControl", PAGE)

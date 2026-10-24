@@ -119,12 +119,9 @@
     .tool-title { gap: 10px; min-width: 0; }
     .tool-title h2, .warning, dd, .last-result, #error { overflow-wrap: anywhere; }
     .chip { flex: none; border-radius: var(--radius-sm); padding: 5px 12px; font-size: 12px; font-weight: 600; }
-    .toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
-    .toggle input { flex: none; margin: 0; cursor: pointer; }
     .switch { appearance: none; -webkit-appearance: none; position: relative; transition: background .15s; }
     .switch::after { content: ""; position: absolute; top: 3px; left: 3px; border-radius: 50%; transition: transform .15s; }
     .switch:checked::after { transform: translateX(20px); }
-    .toggle input:disabled { cursor: default; }
     .stoke { min-height: 44px; font-weight: 600; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .stat { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
@@ -140,7 +137,6 @@
     .chip { font-family: var(--font); font-weight: 500; background: var(--accent-soft); color: var(--accent-ink); }
     .chip.closed { background: var(--surface-2); color: var(--text-3); }
     .chip.running { color: var(--accent-ink); }
-    .toggle { font-size: 14px; color: var(--text-2); }
     .switch { width: 44px; height: 24px; border-radius: 12px; background: var(--switch-track); }
     .switch::after { width: 18px; height: 18px; background: var(--switch-thumb); }
     .switch:checked { background: var(--accent); }
@@ -244,10 +240,32 @@
     .status-ok { color: var(--text-2); }
     .status-warn { color: var(--accent-ink); }
     .status-bad { color: var(--danger-ink); }
-    .form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .field { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
     .field.num { width: 56px; text-align: center; }
     .field:disabled { color: var(--text-4); }
+    #settings-dialog .dialog-body { gap: 12px; }
+    .settings-box { border-radius: var(--radius-box); background: var(--surface-2); }
+    .settings-row { display: flex; align-items: center; min-height: 56px; gap: 12px; padding: 12px 14px; }
+    .settings-tile { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); }
+    .settings-tile .ic { width: 18px; height: 18px; }
+    .settings-copy { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+    .settings-row strong { font-size: 14px; font-weight: 600; color: var(--text); }
+    .settings-copy span { font-size: 13px; color: var(--text-3); }
+    .settings-row .switch { flex: none; margin: 0; cursor: pointer; }
+    .settings-row .switch:disabled { cursor: default; }
+    .settings-interval { border-top: 1px solid var(--line); }
+    .settings-interval.dimmed { opacity: .45; }
+    .settings-clock { display: flex; justify-content: center; width: 20px; flex: none; color: var(--text-3); }
+    .settings-clock .ic { width: 20px; height: 20px; }
+    .settings-interval > strong { flex: 1; }
+    .settings-stepper { display: flex; align-items: center; flex: none; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); font-family: var(--mono); }
+    .settings-stepper button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--text-2); }
+    .settings-stepper button:hover:not(:disabled) { color: var(--accent-ink); }
+    .settings-stepper button:disabled { color: var(--text-4); }
+    .settings-stepper .field { width: 2.5ch; padding: 0; border: 0; border-radius: 0; background: transparent; }
+    .settings-stepper span { padding: 0 6px; font-size: 13px; color: var(--text-2); }
+    .settings-caution { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--caution-soft); color: var(--caution-text); font-size: 13px; line-height: 1.5; }
+    .settings-caution .ic { margin-top: 2px; color: var(--accent-ink); }
     .setting-section { display: flex; flex-direction: column; gap: 10px; }
     .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
     .signin-rows { display: flex; flex-direction: column; gap: 8px; }
@@ -273,18 +291,11 @@
     .note-line .note-dismiss { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; }
     .dot { display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--danger-ink); vertical-align: middle; }
     .dot.caution { background: var(--accent-ink); }
-    .heading-tools { display: flex; align-items: center; gap: 4px; flex: none; }
+    .heading-tools { display: flex; align-items: center; gap: 0; flex: none; margin-right: -8px; }
+    .heading-tools .icon-button { width: 40px; }
     .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--text-3); }
     .icon-button:hover, .icon-button:focus-visible { color: var(--accent-ink); }
     .icon-button .dot { position: absolute; top: 10px; right: 10px; margin: 0; }
-    .more-menu { position: relative; display: flex; flex: none; }
-    .more-menu > summary { list-style: none; cursor: pointer; }
-    .more-menu > summary::-webkit-details-marker { display: none; }
-    .more-menu > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-    .more-menu[open] > summary { color: var(--accent-ink); }
-    .menu-pop { top: calc(100% + 8px); right: 0; width: min(240px, calc(100vw - 48px)); padding: 6px; display: flex; flex-direction: column; }
-    .menu-pop .toggle { width: 100%; justify-content: space-between; padding: 0 10px; }
-    .menu-separator { height: 1px; margin: 4px 10px; background: var(--line); }
     .menu-item { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: var(--radius-field); font: inherit; font-size: 14px; color: var(--text-2); text-align: left; cursor: pointer; }
     .menu-item svg { flex: none; color: var(--text-3); }
     .menu-item:hover, .menu-item:focus-visible { background: var(--surface-2); }
@@ -294,8 +305,8 @@
     .header-tools { gap: 14px; }
     .brand > svg { width: 28px; height: 28px; stroke: var(--accent); flex: none; }
     .ic { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .ic.flame-detail { stroke-width: 1.4; }
     .menu-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .more-icon { width: 18px; height: 18px; fill: currentColor; stroke: none; }
     .warning > svg, .warn-line > svg { stroke: var(--danger-ink); flex: none; }
     .caution > svg { stroke: var(--accent-ink); }
     .dial svg { width: 200px; height: 200px; }
@@ -435,12 +446,30 @@
         <button id="settings-close" type="button" class="dialog-x" aria-label="Close"></button>
       </div>
       <div class="dialog-body">
-        <section class="setting-section">
-          <h3>Auto-refresh usage</h3>
-          <label class="toggle"><input id="ar-enabled" type="checkbox" class="switch"> <span>Read usage automatically</span></label>
-          <div class="form-row"><span>Every</span><input id="ar-value" class="field num" type="text" inputmode="numeric" maxlength="2" aria-label="Refresh interval"><span>minutes</span></div>
-          <p id="ar-hint" class="small muted"></p>
+        <section class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="flame"></span>
+            <div class="settings-copy"><strong>Auto-stoke</strong><span>Starts a new window when the current one ends</span></div>
+            <input id="auto-enabled" type="checkbox" class="switch" aria-label="Auto-stoke">
+          </div>
         </section>
+        <section id="ar-box" class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="cycle"></span>
+            <div class="settings-copy"><strong>Auto-refresh usage</strong><span>Reads usage without sending a message</span></div>
+            <input id="ar-enabled" type="checkbox" class="switch" aria-label="Read usage automatically">
+          </div>
+          <div id="ar-interval" class="settings-row settings-interval">
+            <span class="settings-clock" data-settings-icon="clock"></span><strong>Every</strong>
+            <div class="settings-stepper">
+              <button id="ar-minus" type="button" aria-label="Fewer minutes" data-settings-icon="minus"></button>
+              <input id="ar-value" class="field num" type="text" inputmode="numeric" maxlength="2" aria-label="Refresh interval">
+              <span>min</span>
+              <button id="ar-plus" type="button" aria-label="More minutes" data-settings-icon="plus"></button>
+            </div>
+          </div>
+        </section>
+        <p id="settings-caution" class="settings-caution"><span data-settings-icon="info"></span><span>Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude.</span></p>
         <p id="settings-message" class="small failed" role="status" hidden></p>
       </div>
       <div class="dialog-actions">
@@ -517,7 +546,7 @@
     const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const WARN = new Map([
-      ['auto_stopped', ['Auto-stoke stopped', 'The CLI kept reporting a reset time in the past, so auto-stoke was switched off to avoid repeated messages. Turn auto-stoke on or press Stoke now to resume.']],
+      ['auto_stopped', ['Auto-stoke stopped', 'The CLI kept reporting a reset time in the past, so auto-stoke was switched off to avoid repeated messages. Turn auto-stoke on in Settings or press Stoke now to resume.']],
       ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
       ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']],
@@ -667,6 +696,8 @@
       refresh: ['M21 12a9 9 0 0 0-15-6.7L3 8', 'M3 3v5h5', 'M3 12a9 9 0 0 0 15 6.7L21 16', 'M21 21v-5h-5'],
       clock: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 'M12 6v6l4 2'],
       plus: ['M12 5v14', 'M5 12h14'],
+      minus: ['M5 12h14'],
+      info: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M12 16v-4', 'M12 8h.01'],
       cycle: ['M3 12a9 9 0 0 1 15-6.7L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 0 1-15 6.7L3 16', 'M3 21v-5h5'],
       undo: ['M3 10a9 9 0 1 1 2.6 8.4', 'M3 4v6h6'],
       check: ['M5 12l4 4L19 6'],
@@ -678,9 +709,10 @@
       system: ['M12 3a9 9 0 1 0 0 18V3z', 'M12 3a9 9 0 1 1 0 18'],
       dark: ['M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z']
     };
-    function icon(kind) {
+    function icon(kind, detail = false) {
       // The flame drawing spans y=3..18; shift it so its base sits on the "stoke" baseline.
-      const image = svg('svg', { class: `ic icon-${kind}`, viewBox: kind === 'flame' ? '0 -3 24 24' : '0 0 24 24', 'aria-hidden': 'true' });
+      const flameDetail = kind === 'flame' && detail;
+      const image = svg('svg', { class: `ic icon-${kind}${flameDetail ? ' flame-detail' : ''}`, viewBox: kind === 'flame' ? (flameDetail ? '4 2.5 16 16' : '0 -3 24 24') : '0 0 24 24', 'aria-hidden': 'true' });
       ICONS[kind].forEach(d => image.append(svg('path', { d })));
       return image;
     }
@@ -700,7 +732,7 @@
     }
     function infoRow(kind, className = '') {
       const box = el('div', `signin-row${className ? ' ' + className : ''}`), copy = el('div', 'signin-copy');
-      box.append(icon(kind), copy);
+      box.append(icon(kind, true), copy);
       return { box, copy };
     }
     function live(element, field, tool) {
@@ -775,18 +807,6 @@
       if (tool.warningKey === 'read_signed_out') copy.append(el('code', 'command', LOGIN_COMMAND));
       box.append(copy);
       return box;
-    }
-    function autoControl(tool) {
-      const label = el('label', 'toggle'), input = el('input', 'switch');
-      input.setAttribute('type', 'checkbox');
-      input.setAttribute('data-key', `${tool.name}:auto`);
-      input.setAttribute('data-tool', tool.name);
-      input.setAttribute('aria-label', `Auto-stoke for ${tool.label}`);
-      input.checked = tool.auto;
-      input.disabled = busy.has(tool.name);
-      input.addEventListener('change', () => act(tool.name, 'auto', { enabled: input.checked }));
-      label.append(el('span', '', 'Auto-stoke'), input);
-      return label;
     }
     function stokeControl(tool) {
       const button = el('button', 'stoke', tool.buttonText);
@@ -1154,7 +1174,7 @@
     function signinState(tool, current = now()) {
       const auth = tool.auth, rows = [];
       const status = readStatus(tool.last_read, current), level = tool.last_read && !tool.last_read.ok ? 'bad' : 'ok';
-      const readIcon = tool.last_read ? (tool.last_read.ok ? 'check' : 'cross') : null;
+      const readIcon = tool.last_read && !tool.last_read.ok ? 'cross' : null;
       if (auth.shared) return [{ title: 'Stoking + reading', kind: auth.shared.label, status, level, icon: readIcon }];
       if (auth.stoke) {
         const expires = auth.stoke.expires_at, left = expires - current, soon = expires != null && left < 30 * 86400;
@@ -1299,86 +1319,100 @@
       }
       return image;
     }
-    function moreMenu(tool) {
-      const box = popover(tool, 'menu', 'more-menu'), summary = el('summary', 'icon-button');
-      summary.setAttribute('data-key', `${tool.name}:menu`);
-      summary.setAttribute('aria-label', `${tool.label} menu`);
-      summary.setAttribute('title', 'Menu');
-      const image = svg('svg', { class: 'more-icon', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
-      [5, 12, 19].forEach(cx => image.append(svg('circle', { cx, cy: 12, r: 1.6 })));
-      summary.append(image);
-      if (tool.hasWarning) summary.append(dot(tool));
-      const pop = el('div', 'popover-surface menu-pop'), separator = el('div', 'menu-separator');
-      separator.setAttribute('aria-hidden', 'true');
-      pop.append(autoControl(tool), separator);
+    function headingTools(tool) {
+      const box = el('div', 'heading-tools');
       ['settings', 'info'].forEach(kind => {
-        const button = el('button', 'menu-item'), label = kind === 'settings' ? 'Settings' : 'Info';
+        const button = el('button', 'icon-button'), label = kind === 'settings' ? 'Settings' : 'Info';
         button.setAttribute('type', 'button');
         button.setAttribute('data-key', `${tool.name}:${kind}`);
-        button.append(menuIcon(kind), el('span', '', label));
+        button.setAttribute('aria-label', `${tool.label} ${kind}`);
+        button.setAttribute('title', label);
+        button.append(menuIcon(kind));
         if (kind === 'info' && tool.hasWarning) button.append(dot(tool));
         button.addEventListener('click', () => {
-          closePopover(box);
-          summary.focus({ preventScroll: true });
           if (kind === 'settings') openSettings(tool.name);
           else openInfo(tool.name);
         });
-        pop.append(button);
+        box.append(button);
       });
-      box.append(summary, pop);
       return box;
     }
     const settingsDialog = document.querySelector('#settings-dialog');
+    const autoEnabled = document.querySelector('#auto-enabled'), arBox = document.querySelector('#ar-box');
     const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value');
+    const arMinus = document.querySelector('#ar-minus'), arPlus = document.querySelector('#ar-plus');
     const settingsMessage = document.querySelector('#settings-message'), settingsSave = document.querySelector('#settings-save');
+    settingsDialog.querySelectorAll('[data-settings-icon]').forEach(slot => slot.append(icon(slot.dataset.settingsIcon, true)));
     let settingsTool = null, settingsSaving = false;
     function arSeconds() { return Number(arValue.value) * 60; }
-    function syncSettings() {
+    function syncSettings(showValidation = true) {
       const seconds = arSeconds();
-      const bad = !/^\d{1,2}$/.test(arValue.value) || seconds < 60 || seconds > 3600;
-      arEnabled.disabled = settingsSaving;
-      arValue.disabled = settingsSaving || !arEnabled.checked;
+      const bad = !arBox.hidden && (!/^\d{1,2}$/.test(arValue.value) || seconds < 60 || seconds > 3600);
+      const disabled = settingsSaving || arBox.hidden || !arEnabled.checked;
+      autoEnabled.disabled = settingsSaving;
+      arEnabled.disabled = settingsSaving || arBox.hidden;
+      arValue.disabled = disabled;
+      arMinus.disabled = disabled || Number(arValue.value) <= 1;
+      arPlus.disabled = disabled || Number(arValue.value) >= 60;
+      document.querySelector('#ar-interval').classList.toggle('dimmed', !arEnabled.checked);
       settingsSave.disabled = settingsSaving || bad;
       document.querySelector('#settings-close').disabled = settingsSaving;
-      settingsMessage.textContent = bad ? 'Enter 1 to 60 minutes.' : '';
-      settingsMessage.hidden = !bad;
+      if (showValidation) {
+        settingsMessage.textContent = bad ? 'Enter 1 to 60 minutes.' : '';
+        settingsMessage.hidden = !bad;
+      }
     }
     function openSettings(name) {
       if (settingsSaving) return;
       settingsTool = name;
       const tool = state.tools[name], ar = tool.auto_refresh;
       document.querySelector('#settings-title').textContent = `${tool.label} settings`;
+      autoEnabled.checked = tool.auto_stoke;
+      arBox.hidden = !tool.refreshable;
       arEnabled.checked = ar.enabled;
       arValue.value = Math.min(60, Math.max(1, Math.round(ar.seconds / 60)));
-      document.querySelector('#ar-hint').textContent = name === 'claude'
-        ? 'Reads usage without sending a message. Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude. Refresh usage always works.'
-        : 'Reads Codex usage without sending a message. Refresh usage always works.';
+      document.querySelector('#settings-caution').hidden = name !== 'claude';
       syncSettings();
       dialogFocus.set(settingsDialog, document.activeElement?.dataset?.key);
       openDialog(settingsDialog);
     }
-    arEnabled.addEventListener('input', syncSettings);
+    arEnabled.addEventListener('input', () => syncSettings());
     arValue.addEventListener('input', () => { digitsOnly(arValue); syncSettings(); });
+    function stepMinutes(direction) {
+      const minutes = Number(arValue.value);
+      arValue.value = Math.min(60, Math.max(1, (direction > 0 ? Math.floor(minutes / 5) + 1 : Math.ceil(minutes / 5) - 1) * 5));
+      syncSettings();
+    }
+    arMinus.addEventListener('click', () => stepMinutes(-1));
+    arPlus.addEventListener('click', () => stepMinutes(1));
     document.querySelector('#settings-close').addEventListener('click', () => settingsDialog.close());
+    settingsDialog.addEventListener('cancel', event => { if (settingsSaving) event.preventDefault(); });
     document.querySelector('#settings-form').addEventListener('submit', async event => {
       event.preventDefault();
       if (settingsSave.disabled) return;
+      const name = settingsTool, tool = state.tools[name], enabled = autoEnabled.checked;
       const body = { enabled: arEnabled.checked, seconds: arSeconds() };
+      const autoChanged = enabled !== tool.auto_stoke;
+      const arChanged = tool.refreshable && (body.enabled !== tool.auto_refresh.enabled || body.seconds !== tool.auto_refresh.seconds);
+      if (!autoChanged && !arChanged) { settingsDialog.close(); return; }
       settingsSaving = true;
+      busy.add(name);
+      syncControls();
       syncSettings();
       try {
-        await post(settingsTool, 'auto-refresh', body);
-        await refresh();
+        if (autoChanged) await post(name, 'auto', { enabled });
+        if (arChanged) await post(name, 'auto-refresh', body);
+        showError('');
         settingsDialog.close();
       } catch (failure) {
         settingsMessage.textContent = failure.message;
         settingsMessage.hidden = false;
       } finally {
+        await refresh();
+        busy.delete(name);
         settingsSaving = false;
-        arEnabled.disabled = false;
-        arValue.disabled = !arEnabled.checked;
-        settingsSave.disabled = false;
-        document.querySelector('#settings-close').disabled = false;
+        syncSettings(false);
+        syncControls();
       }
     });
     const resetDialog = document.querySelector('#reset-dialog');
@@ -1608,9 +1642,7 @@
       vm.forEach(tool => {
         const card = el('section', 'card');
         const heading = el('div', 'card-heading');
-        const tools = el('div', 'heading-tools');
-        tools.append(moreMenu(tool));
-        heading.append(toolTitle(tool), tools);
+        heading.append(toolTitle(tool), headingTools(tool));
         const body = el('div', 'dial-body'), dial = el('div', 'dial');
         const ring = live(svg('svg', { width: 200, height: 200, viewBox: '0 0 200 200', role: 'img', 'aria-label': tool.dialLabel }), 'dialLabel', tool);
         ring.append(svg('circle', { cx: 100, cy: 100, r: 86, fill: 'none', class: 'dial-track', 'stroke-width': 12 }));
