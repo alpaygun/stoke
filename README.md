@@ -120,8 +120,8 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 ## Using the panel
 
 - The **Auto-stoke** switch in the card's **⋯ menu** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
-- **Refresh usage** reads usage without sending a message. **Settings** in the card's **⋯ menu** turns automatic refresh on (60 seconds to 24 hours).
-- **Info** in the card's **⋯ menu** shows the full text of a warning, the plan with its quiet hours and last result, the sign-in state and the history of early weekly resets.
+- **Refresh usage** reads usage without sending a message. **Settings** in the card's **⋯ menu** turns automatic refresh on (1 to 60 whole minutes).
+- **Info** in the card's **⋯ menu** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
 - **Limit resets** on the card opens the list of available resets.
 - **Plan a stoke** sets a start time. In the 5 hours before it, automatic stokes wait; a manual stoke asks before it skips the plan. A plan is refused if the current window would still be open at that time.
 - **Gap** in the header (both tools on auto) opens suggested start times that move the two windows 2.5 h apart.

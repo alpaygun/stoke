@@ -115,11 +115,11 @@ class AutoRefresh:
 
 
 def validate_auto_refresh(enabled: bool, seconds: int) -> None:
-    """Reject coercion and intervals outside one minute to one day."""
+    """Require a strict boolean and whole-minute intervals from 1 to 60 minutes."""
     if type(enabled) is not bool:
         raise ValueError("enabled must be bool")
-    if type(seconds) is not int or not 60 <= seconds <= 86400:
-        raise ValueError("seconds must be an integer between 60 and 86400")
+    if type(seconds) is not int or not 60 <= seconds <= 3600 or seconds % 60 != 0:
+        raise ValueError("seconds must be an integer multiple of 60 between 60 and 3600")
 
 
 @dataclass

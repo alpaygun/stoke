@@ -197,9 +197,18 @@
     .reset-note { font-size: 12px; color: var(--text-3); margin-top: 10px; }
     .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: var(--accent-ink); font-size: 13px; }
     .text-button:hover:not(:disabled) { text-decoration: underline; }
-    dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--line-strong); border-radius: var(--radius-tile); background: var(--surface); color: var(--text); }
+    dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-tile); background: var(--surface); color: var(--text); }
+    dialog[open] { display: flex; flex-direction: column; }
     dialog::backdrop { background: var(--backdrop); }
     .plan-form { display: flex; flex-direction: column; gap: 18px; }
+    dialog > .plan-form { gap: 0; flex: 1 1 auto; min-height: 0; }
+    .dialog-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 12px 14px 24px; border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin: 0; }
+    .dialog-x { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; border: 0; border-radius: var(--radius-field); background: transparent; color: var(--text-3); }
+    .dialog-x svg { width: 20px; height: 20px; }
+    .dialog-x:hover:not(:disabled), .dialog-x:focus-visible { color: var(--accent-ink); }
+    .dialog-x:disabled { color: var(--text-4); opacity: .55; }
+    .dialog-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 18px; }
     .plan-form h2 { font-size: 22px; }
     .plan-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
     .plan-form legend { margin-bottom: 8px; color: var(--text-3); font-size: 13px; }
@@ -220,9 +229,14 @@
     #plan-time { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); }
     #plan-message, #plan-block { white-space: pre-line; overflow-wrap: anywhere; }
     #plan-message.failed { color: var(--danger-text); }
-    .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
-    .dialog-actions button { padding: 8px 16px; }
+    .dialog-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 24px; border-top: 1px solid var(--line); }
+    .dialog-actions .stoke, .dialog-actions .refresh { position: relative; min-height: 36px; height: 36px; padding: 0 18px; }
+    .dialog-actions .stoke::after, .dialog-actions .refresh::after { content: ""; position: absolute; inset: -4px 0; }
     .dialog-actions .text-button { margin-right: auto; padding-left: 0; padding-right: 0; }
+    .weekly-show-all { align-self: center; }
+    .dialog-actions.weekly-pages { justify-content: center; gap: 8px; font-size: 13px; }
+    .weekly-pages .icon-button:disabled { color: var(--text-4); }
+    #weekly-prev svg { transform: scaleX(-1); }
 
     .reset-item .reset-source { font-size: 12px; color: var(--text-3); }
     .reset-item .text-button { min-height: 24px; font-size: 12px; }
@@ -232,19 +246,21 @@
     .status-bad { color: var(--danger-ink); }
     .form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .field { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
-    .field.num { width: 96px; }
+    .field.num { width: 56px; text-align: center; }
     .field:disabled { color: var(--text-4); }
     .setting-section { display: flex; flex-direction: column; gap: 10px; }
     .setting-section h3 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
     .signin-rows { display: flex; flex-direction: column; gap: 8px; }
-    .signin-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
+    .signin-row { display: flex; flex-direction: row; gap: 12px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
+    .signin-row > svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: var(--text-3); }
+    .signin-row.warn > svg { color: var(--accent-ink); }
+    .signin-copy { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
     .signin-row.warn { background: var(--caution-soft); box-shadow: inset 3px 0 0 var(--accent-ink); }
     .signin-row.bad { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger-ink); }
     .signin-row .row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
     .signin-row .mono { overflow-wrap: anywhere; }
     .command { display: block; margin-top: 6px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--text-2); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
     .warning.caution { background: var(--caution-soft); border-color: var(--caution-line); color: var(--caution-text); }
-    .info-body { display: flex; flex-direction: column; gap: 16px; }
     .warn-line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 14px; border: 1px solid var(--danger-line); border-radius: 14px; background: var(--danger-soft); color: var(--danger-text); font-size: 14px; text-align: left; }
     .warn-line.caution { border-color: var(--caution-line); background: var(--caution-soft); color: var(--caution-text); }
     .warn-line .warn-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -364,84 +380,116 @@
   <div id="app"></div>
   <dialog id="plan-dialog" aria-labelledby="plan-title">
     <form id="plan-form" class="plan-form">
-      <h2 id="plan-title">Plan a stoke</h2>
-      <p id="plan-outcome" class="small status-warn" hidden></p>
-      <fieldset><legend>Tools</legend><div id="plan-tools"></div></fieldset>
-      <label for="plan-time">Local time <input id="plan-time" type="time" value="07:00" required></label>
-      <fieldset>
-        <legend>Repeat</legend>
-        <label><input type="radio" name="repeat" value="once" checked> Once</label>
-        <label><input type="radio" name="repeat" value="daily"> Every day</label>
-      </fieldset>
-      <fieldset>
-        <legend>After the planned stoke</legend>
-        <label><input type="radio" name="auto_after" value="keep" checked> Keep auto-stoke as is</label>
-        <label><input type="radio" name="auto_after" value="on"> Turn auto-stoke on</label>
-        <label><input type="radio" name="auto_after" value="off"> Turn auto-stoke off</label>
-      </fieldset>
-      <p id="plan-hint" class="small muted"></p>
-      <p id="plan-block" class="small failed" role="status" hidden></p>
-      <p id="plan-message" class="small" role="status" hidden></p>
+      <div class="dialog-head">
+        <h2 id="plan-title">Plan a stoke</h2>
+        <button id="plan-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div class="dialog-body">
+        <p id="plan-outcome" class="small status-warn" hidden></p>
+        <fieldset><legend>Tools</legend><div id="plan-tools"></div></fieldset>
+        <label for="plan-time">Local time <input id="plan-time" type="time" value="07:00" required></label>
+        <fieldset>
+          <legend>Repeat</legend>
+          <label><input type="radio" name="repeat" value="once" checked> Once</label>
+          <label><input type="radio" name="repeat" value="daily"> Every day</label>
+        </fieldset>
+        <fieldset>
+          <legend>After the planned stoke</legend>
+          <label><input type="radio" name="auto_after" value="keep" checked> Keep auto-stoke as is</label>
+          <label><input type="radio" name="auto_after" value="on"> Turn auto-stoke on</label>
+          <label><input type="radio" name="auto_after" value="off"> Turn auto-stoke off</label>
+        </fieldset>
+        <p id="plan-hint" class="small muted"></p>
+        <p id="plan-block" class="small failed" role="status" hidden></p>
+        <p id="plan-message" class="small" role="status" hidden></p>
+      </div>
       <div class="dialog-actions">
         <button id="plan-remove" type="button" class="text-button" hidden>Remove plan</button>
-        <button id="plan-close" type="button" class="refresh">Close</button>
         <button id="plan-save" type="submit" class="stoke">Save</button>
       </div>
     </form>
   </dialog>
   <dialog id="offset-dialog" aria-labelledby="offset-title">
     <div class="plan-form">
-      <h2 id="offset-title">Offset windows</h2>
-      <p id="offset-now" class="offset-now"></p>
-      <section id="offset-pick" class="offset-pick">
-        <fieldset><legend>Who waits</legend><div id="offset-who" class="offset-who"></div></fieldset>
-        <fieldset>
-          <legend>Pick a start time · one tap sets a one-time plan</legend>
-          <div id="offset-options"></div>
-        </fieldset>
-      </section>
-      <p id="offset-error" class="small failed" role="status" hidden></p>
-      <div class="dialog-actions"><button id="offset-close" type="button" class="refresh">Close</button></div>
+      <div class="dialog-head">
+        <h2 id="offset-title">Offset windows</h2>
+        <button id="offset-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div class="dialog-body">
+        <p id="offset-now" class="offset-now"></p>
+        <section id="offset-pick" class="offset-pick">
+          <fieldset><legend>Who waits</legend><div id="offset-who" class="offset-who"></div></fieldset>
+          <fieldset>
+            <legend>Pick a start time · one tap sets a one-time plan</legend>
+            <div id="offset-options"></div>
+          </fieldset>
+        </section>
+        <p id="offset-error" class="small failed" role="status" hidden></p>
+      </div>
     </div>
   </dialog>
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form" class="plan-form">
-      <h2 id="settings-title">Settings</h2>
-      <section class="setting-section">
-        <h3>Auto-refresh usage</h3>
-        <label class="toggle"><input id="ar-enabled" type="checkbox" class="switch"> <span>Read usage automatically</span></label>
-        <div class="form-row"><span>Every</span><input id="ar-value" class="field num" type="number" min="1" step="1" aria-label="Refresh interval"><select id="ar-unit" class="field" aria-label="Interval unit"><option value="60">minutes</option><option value="1">seconds</option></select></div>
-        <p id="ar-hint" class="small muted"></p>
-      </section>
-      <p id="settings-message" class="small failed" role="status" hidden></p>
+      <div class="dialog-head">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div class="dialog-body">
+        <section class="setting-section">
+          <h3>Auto-refresh usage</h3>
+          <label class="toggle"><input id="ar-enabled" type="checkbox" class="switch"> <span>Read usage automatically</span></label>
+          <div class="form-row"><span>Every</span><input id="ar-value" class="field num" type="text" inputmode="numeric" maxlength="2" aria-label="Refresh interval"><span>minutes</span></div>
+          <p id="ar-hint" class="small muted"></p>
+        </section>
+        <p id="settings-message" class="small failed" role="status" hidden></p>
+      </div>
       <div class="dialog-actions">
-        <button id="settings-close" type="button" class="refresh">Close</button>
         <button id="settings-save" type="submit" class="stoke">Save</button>
       </div>
     </form>
   </dialog>
   <dialog id="info-dialog" aria-labelledby="info-title">
     <div class="plan-form">
-      <h2 id="info-title">Info</h2>
-      <div id="info-body" class="info-body"></div>
-      <div class="dialog-actions">
-        <button id="info-close" type="button" class="refresh">Close</button>
+      <div class="dialog-head">
+        <h2 id="info-title">Info</h2>
+        <button id="info-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div id="info-body" class="dialog-body"></div>
+    </div>
+  </dialog>
+  <dialog id="weekly-dialog" aria-labelledby="weekly-title">
+    <div class="plan-form">
+      <div class="dialog-head">
+        <h2 id="weekly-title">Weekly resets</h2>
+        <button id="weekly-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div id="weekly-body" class="dialog-body"></div>
+      <div class="dialog-actions weekly-pages">
+        <button id="weekly-prev" type="button" class="icon-button" aria-label="Previous page"></button>
+        <label for="weekly-page">Page</label>
+        <input id="weekly-page" class="field num" type="text" inputmode="numeric" aria-label="Page number">
+        <span id="weekly-total"></span>
+        <button id="weekly-next" type="button" class="icon-button" aria-label="Next page"></button>
       </div>
     </div>
   </dialog>
   <dialog id="reset-dialog" aria-labelledby="reset-title">
     <form id="reset-form" class="plan-form">
-      <h2 id="reset-title">Add a limit reset</h2>
-      <fieldset>
-        <legend>Type</legend>
-        <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
-        <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
-      </fieldset>
-      <label for="reset-date">Expires on <input id="reset-date" class="field" type="date" required></label>
-      <p id="reset-message" class="small failed" role="status" hidden></p>
-      <p class="small muted">Copy it from Claude → Settings → Usage → Limit resets. Stoke can't read Claude's resets: remove it here after you use it.</p>
+      <div class="dialog-head">
+        <h2 id="reset-title">Add a limit reset</h2>
+        <button id="reset-close" type="button" class="dialog-x" aria-label="Close"></button>
+      </div>
+      <div class="dialog-body">
+        <fieldset>
+          <legend>Type</legend>
+          <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
+          <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
+        </fieldset>
+        <label for="reset-date">Expires on <input id="reset-date" class="field" type="date" required></label>
+        <p id="reset-message" class="small failed" role="status" hidden></p>
+        <p class="small muted">Copy it from Claude → Settings → Usage → Limit resets. Stoke can't read Claude's resets: remove it here after you use it.</p>
+      </div>
       <div class="dialog-actions">
-        <button id="reset-close" type="button" class="refresh">Close</button>
         <button id="reset-save" type="submit" class="stoke">Add</button>
       </div>
     </form>
@@ -623,6 +671,7 @@
       undo: ['M3 10a9 9 0 1 1 2.6 8.4', 'M3 4v6h6'],
       check: ['M5 12l4 4L19 6'],
       cross: ['M6 6l12 12', 'M6 18 18 6'],
+      key: ['M2.6 17.4A2 2 0 0 0 2 18.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z', 'M16.5 7.5h.01'],
       gap: ['M3 7h18l-4-4', 'M21 17H3l4 4'],
       chevron: ['M9 5l7 7-7 7'],
       light: ['M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'],
@@ -634,6 +683,25 @@
       const image = svg('svg', { class: `ic icon-${kind}`, viewBox: kind === 'flame' ? '0 -3 24 24' : '0 0 24 24', 'aria-hidden': 'true' });
       ICONS[kind].forEach(d => image.append(svg('path', { d })));
       return image;
+    }
+    document.querySelectorAll('.dialog-x').forEach(button => button.append(icon('cross')));
+    function openDialog(dialog) {
+      dialog.showModal();
+      dialog.querySelector('.dialog-x').focus({ preventScroll: true });
+      dialog.querySelector('.dialog-body').scrollTop = 0;
+      dialog.scrollTop = 0;
+    }
+    function refillDialog(body, parts) {
+      const scrollTop = body.scrollTop;
+      const focusKey = body.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+      body.replaceChildren(...parts);
+      restoreFocus(focusKey);
+      body.scrollTop = scrollTop;
+    }
+    function infoRow(kind, className = '') {
+      const box = el('div', `signin-row${className ? ' ' + className : ''}`), copy = el('div', 'signin-copy');
+      box.append(icon(kind), copy);
+      return { box, copy };
     }
     function live(element, field, tool) {
       element.setAttribute('data-live', field);
@@ -911,7 +979,7 @@
       offsetError.hidden = true;
       offsetError.textContent = '';
       fillOffset();
-      offsetDialog.showModal();
+      openDialog(offsetDialog);
     }
     async function setOffsetPlan(target) {
       if (offsetSaving) return;
@@ -942,17 +1010,17 @@
       section.append(el('h3', '', 'Plan'));
       const plan = tool.plan;
       if (plan) {
-        const box = el('div', 'signin-row'), head = el('div', 'row-head');
+        const { box, copy } = infoRow('clock'), head = el('div', 'row-head');
         head.append(el('strong', '', plan.repeat === 'daily' ? `Every day ${plan.time}` : `Once, ${when(plan.target_at, current)}`),
           el('span', 'muted', plan.auto_after == null ? 'auto-stoke kept as is' : `then auto-stoke ${plan.auto_after ? 'on' : 'off'}`));
-        box.append(head, el('span', 'mono', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
+        copy.append(head, el('span', 'mono', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
         rows.append(box);
       }
       const outcome = recentPlanOutcome(tool, current);
       if (outcome) {
-        const box = el('div', 'signin-row warn'), head = el('div', 'row-head');
+        const { box, copy } = infoRow('warning', 'warn'), head = el('div', 'row-head');
         head.append(el('strong', '', 'Last plan'), el('span', 'muted', when(outcome.target_at, current)));
-        box.append(head, el('span', 'mono status-warn', outcome.result === 'broken' ? 'skipped by manual stoke' : 'missed'));
+        copy.append(head, el('span', 'mono status-warn', outcome.result === 'broken' ? 'skipped by manual stoke' : 'missed'));
         rows.append(box);
       }
       if (!rows.childElementCount) rows.append(el('span', 'muted', 'No plan.'));
@@ -1033,7 +1101,7 @@
       updatePlanSave();
       syncPlanRemove();
       updatePlanHint();
-      planDialog.showModal();
+      openDialog(planDialog);
     }
     planTime.addEventListener('input', updatePlanHint);
     document.querySelector('#plan-close').addEventListener('click', () => planDialog.close());
@@ -1097,35 +1165,44 @@
       return rows;
     }
     const dialogFocus = new Map();
+    function weeklyRow(entry) {
+      const { box, copy } = infoRow('undo'), head = el('div', 'row-head');
+      head.append(el('strong', '', entry.kind === 'credit' ? 'Reset credit used' : 'Reset early'),
+        el('span', 'muted', `weekly ${Math.round(entry.before_used)}% → ${Math.round(entry.after_used)}%`));
+      copy.append(head, el('span', 'mono', weeklyRange(entry)));
+      return box;
+    }
     function infoContent(tool) {
       const parts = [];
       if (tool.hasWarning) parts.push(warning(tool));
       parts.push(planSection(tool));
+      const resets = el('section', 'setting-section'), history = el('div', 'signin-rows');
+      resets.append(el('h3', '', 'Weekly resets'));
+      tool.weeklyResets.slice(0, 3).forEach(entry => history.append(weeklyRow(entry)));
+      if (!tool.weeklyResets.length) history.append(el('span', 'muted', 'None detected yet.'));
+      resets.append(history);
+      if (tool.weeklyResets.length > 3) {
+        const showAll = el('button', 'text-button weekly-show-all', `Show all ${tool.weeklyResets.length}`);
+        showAll.setAttribute('type', 'button');
+        showAll.setAttribute('data-key', `${tool.name}:weekly-all`);
+        showAll.addEventListener('click', () => openWeekly(tool.name));
+        resets.append(showAll);
+      }
+      parts.push(resets);
       const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
       section.append(el('h3', '', 'Sign-in'));
       signinState(tool).forEach(row => {
-        const box = el('div', `signin-row${row.level === 'ok' ? '' : ' ' + row.level}`), head = el('div', 'row-head');
+        const kind = row.title === 'Stoking' ? 'flame' : row.title === 'Reading usage' ? 'refresh' : 'key';
+        const { box, copy } = infoRow(kind, row.level === 'ok' ? '' : row.level), head = el('div', 'row-head');
         head.append(el('strong', '', row.title), el('span', 'muted', row.kind));
         const status = el('span', `mono status-line status-${row.level}`);
         if (row.icon) status.append(icon(row.icon));
         status.append(el('span', '', row.status));
-        box.append(head, status);
+        copy.append(head, status);
         rows.append(box);
       });
       section.append(rows);
       parts.push(section);
-      const resets = el('section', 'setting-section'), history = el('div', 'signin-rows');
-      resets.append(el('h3', '', 'Weekly resets'));
-      tool.weeklyResets.forEach(entry => {
-        const box = el('div', 'signin-row'), head = el('div', 'row-head');
-        head.append(el('strong', '', entry.kind === 'credit' ? 'Reset credit used' : 'Reset early'),
-          el('span', 'muted', `weekly ${Math.round(entry.before_used)}% → ${Math.round(entry.after_used)}%`));
-        box.append(head, el('span', 'mono', weeklyRange(entry)));
-        history.append(box);
-      });
-      if (!tool.weeklyResets.length) history.append(el('span', 'muted', 'None detected yet.'));
-      resets.append(history);
-      parts.push(resets);
       return parts;
     }
     function dot(tool) { return el('span', `dot${tool.caution ? ' caution' : ''}`); }
@@ -1137,9 +1214,53 @@
       dialogFocus.set(infoDialog, document.activeElement?.dataset?.key);
       document.querySelector('#info-title').textContent = `${tool.label} info`;
       document.querySelector('#info-body').replaceChildren(...infoContent(tool));
-      infoDialog.showModal();
+      openDialog(infoDialog);
     }
     document.querySelector('#info-close').addEventListener('click', () => infoDialog.close());
+    const weeklyDialog = document.querySelector('#weekly-dialog');
+    const weeklyBody = document.querySelector('#weekly-body'), weeklyInput = document.querySelector('#weekly-page');
+    const weeklyPrev = document.querySelector('#weekly-prev'), weeklyNext = document.querySelector('#weekly-next');
+    let weeklyTool = null, weeklyPage = 1;
+    function weeklyPageCount() { return Math.max(1, Math.ceil((state?.tools[weeklyTool]?.weekly_resets?.length ?? 0) / 6)); }
+    function fillWeekly(keepScroll = true) {
+      const tool = view(state.tools[weeklyTool]), pages = weeklyPageCount();
+      const previousPage = weeklyPage;
+      weeklyPage = Math.min(pages, Math.max(1, weeklyPage));
+      document.querySelector('#weekly-title').textContent = `${tool.label} weekly resets`;
+      const rows = el('div', 'signin-rows');
+      tool.weeklyResets.slice((weeklyPage - 1) * 6, weeklyPage * 6).forEach(entry => rows.append(weeklyRow(entry)));
+      refillDialog(weeklyBody, [el('p', 'small muted', `${tool.weeklyResets.length} resets, newest first.`), rows]);
+      if (!keepScroll) weeklyBody.scrollTop = 0;
+      if (document.activeElement !== weeklyInput || previousPage !== weeklyPage || !keepScroll) weeklyInput.value = weeklyPage;
+      document.querySelector('#weekly-total').textContent = `of ${pages}`;
+      weeklyPrev.disabled = weeklyPage === 1;
+      weeklyNext.disabled = weeklyPage === pages;
+    }
+    function openWeekly(name) {
+      weeklyTool = name;
+      weeklyPage = 1;
+      dialogFocus.set(weeklyDialog, document.activeElement?.dataset?.key);
+      fillWeekly(false);
+      openDialog(weeklyDialog);
+    }
+    function digitsOnly(input) { input.value = input.value.replace(/\D/g, ''); }
+    function submitWeeklyPage() {
+      const page = Number(weeklyInput.value);
+      if (Number.isInteger(page) && page >= 1 && page <= weeklyPageCount()) {
+        weeklyPage = page;
+        fillWeekly(false);
+      } else weeklyInput.value = weeklyPage;
+    }
+    weeklyPrev.append(icon('chevron'));
+    weeklyNext.append(icon('chevron'));
+    weeklyPrev.addEventListener('click', () => { weeklyPage--; fillWeekly(false); });
+    weeklyNext.addEventListener('click', () => { weeklyPage++; fillWeekly(false); });
+    weeklyInput.addEventListener('input', () => digitsOnly(weeklyInput));
+    weeklyInput.addEventListener('change', submitWeeklyPage);
+    weeklyInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); submitWeeklyPage(); }
+    });
+    document.querySelector('#weekly-close').addEventListener('click', () => weeklyDialog.close());
     function warnLine(tool) {
       const line = el('button', `warn-line${tool.caution ? ' caution' : ''}`);
       line.setAttribute('type', 'button');
@@ -1207,18 +1328,18 @@
       return box;
     }
     const settingsDialog = document.querySelector('#settings-dialog');
-    const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value'), arUnit = document.querySelector('#ar-unit');
+    const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value');
     const settingsMessage = document.querySelector('#settings-message'), settingsSave = document.querySelector('#settings-save');
     let settingsTool = null, settingsSaving = false;
-    function arSeconds() { return Number(arValue.value) * Number(arUnit.value); }
+    function arSeconds() { return Number(arValue.value) * 60; }
     function syncSettings() {
       const seconds = arSeconds();
-      const bad = !Number.isInteger(seconds) || seconds < 60 || seconds > 86400;
+      const bad = !/^\d{1,2}$/.test(arValue.value) || seconds < 60 || seconds > 3600;
       arEnabled.disabled = settingsSaving;
-      arValue.disabled = arUnit.disabled = settingsSaving || !arEnabled.checked;
+      arValue.disabled = settingsSaving || !arEnabled.checked;
       settingsSave.disabled = settingsSaving || bad;
       document.querySelector('#settings-close').disabled = settingsSaving;
-      settingsMessage.textContent = bad ? 'The interval must be between 60 seconds and 24 hours.' : '';
+      settingsMessage.textContent = bad ? 'Enter 1 to 60 minutes.' : '';
       settingsMessage.hidden = !bad;
     }
     function openSettings(name) {
@@ -1227,16 +1348,16 @@
       const tool = state.tools[name], ar = tool.auto_refresh;
       document.querySelector('#settings-title').textContent = `${tool.label} settings`;
       arEnabled.checked = ar.enabled;
-      arUnit.value = ar.seconds % 60 === 0 ? '60' : '1';
-      arValue.value = ar.seconds / Number(arUnit.value);
+      arValue.value = Math.min(60, Math.max(1, Math.round(ar.seconds / 60)));
       document.querySelector('#ar-hint').textContent = name === 'claude'
         ? 'Reads usage without sending a message. Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude. Refresh usage always works.'
         : 'Reads Codex usage without sending a message. Refresh usage always works.';
       syncSettings();
       dialogFocus.set(settingsDialog, document.activeElement?.dataset?.key);
-      settingsDialog.showModal();
+      openDialog(settingsDialog);
     }
-    [arEnabled, arValue, arUnit].forEach(control => control.addEventListener('input', syncSettings));
+    arEnabled.addEventListener('input', syncSettings);
+    arValue.addEventListener('input', () => { digitsOnly(arValue); syncSettings(); });
     document.querySelector('#settings-close').addEventListener('click', () => settingsDialog.close());
     document.querySelector('#settings-form').addEventListener('submit', async event => {
       event.preventDefault();
@@ -1254,7 +1375,7 @@
       } finally {
         settingsSaving = false;
         arEnabled.disabled = false;
-        arValue.disabled = arUnit.disabled = !arEnabled.checked;
+        arValue.disabled = !arEnabled.checked;
         settingsSave.disabled = false;
         document.querySelector('#settings-close').disabled = false;
       }
@@ -1269,7 +1390,7 @@
       resetMessage.hidden = true;
       document.querySelector('#reset-title').textContent = `Add a ${state.tools[name].label} limit reset`;
       dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
-      resetDialog.showModal();
+      openDialog(resetDialog);
     }
     document.querySelector('#reset-close').addEventListener('click', () => resetDialog.close());
     resetForm.addEventListener('submit', async event => {
@@ -1291,7 +1412,7 @@
         resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = false; });
       }
     });
-    [settingsDialog, infoDialog, resetDialog].forEach(dialog => {
+    [settingsDialog, infoDialog, resetDialog, weeklyDialog].forEach(dialog => {
       dialog.querySelectorAll('button, input, select').forEach((control, index) => {
         control.setAttribute('data-key', control.id || `${dialog.id}:${index}`);
       });
@@ -1339,8 +1460,9 @@
       if (!dialogOpen()) restoreFocus(deferredFocus);
     }
     function restoreFocus(key) {
-      if (!key || dialogOpen()) return;
-      const control = Array.from(app.querySelectorAll('[data-key]')).find(element => element.dataset.key === key);
+      if (!key) return;
+      const scope = Array.from(document.querySelectorAll('dialog[open]')).at(-1) ?? app;
+      const control = Array.from(scope.querySelectorAll('[data-key]')).find(element => element.dataset.key === key);
       if (control && !control.disabled) {
         control.focus({ preventScroll: true });
         deferredFocus = null;
@@ -1445,8 +1567,9 @@
       app.replaceChildren(renderDial(state, vm));
       if (planDialog.open) { syncPlanRemove(); updatePlanSave(); }
       if (infoDialog.open && state.tools[infoTool]) {
-        document.querySelector('#info-body').replaceChildren(...infoContent(view(state.tools[infoTool])));
+        refillDialog(document.querySelector('#info-body'), infoContent(view(state.tools[infoTool])));
       }
+      if (weeklyDialog.open && state.tools[weeklyTool]) fillWeekly();
       if (offsetDialog.open) fillOffset();
       tick();
       restoreFocus(focusKey);

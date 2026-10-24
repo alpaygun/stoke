@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_auto_refresh, validate_plan
+from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -102,11 +102,14 @@ def _plan_outcome(value: Any) -> PlanOutcome | None:
 
 
 def _auto_refresh(value: Any) -> AutoRefresh:
+    """Normalize legacy intervals, rounding half minutes up without losing state."""
     if not isinstance(value, dict):
         raise ValueError("invalid auto refresh")
     enabled, seconds = value.get("enabled", False), value.get("seconds", 300)
-    validate_auto_refresh(enabled, seconds)
-    return AutoRefresh(enabled, seconds)
+    _bool(enabled)
+    if type(seconds) is not int or not 60 <= seconds <= 86400:
+        raise ValueError("invalid stored auto refresh interval")
+    return AutoRefresh(enabled, min(3600, max(60, ((seconds + 30) // 60) * 60)))
 
 
 def _read_record(value: Any) -> ReadRecord | None:

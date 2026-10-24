@@ -97,3 +97,63 @@ def test_theme_initialises_in_head() -> None:
 def test_no_html_injection_or_text_icons() -> None:
     assert not re.search(r"innerHTML|outerHTML|insertAdjacentHTML", PAGE)
     assert not any(glyph in PAGE for glyph in "↻✎⚠↺×")
+
+
+class ElementParser(HTMLParser):
+    """A small tree for checking static dialog structure without a browser."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.root = {"tag": "root", "attrs": {}, "children": [], "text": ""}
+        self.stack = [self.root]
+        self.by_id = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        node = {"tag": tag, "attrs": dict(attrs), "children": [], "text": ""}
+        self.stack[-1]["children"].append(node)
+        if "id" in node["attrs"]:
+            assert node["attrs"]["id"] not in self.by_id
+            self.by_id[node["attrs"]["id"]] = node
+        if tag not in {"meta", "link", "input", "br", "hr", "img"}:
+            self.stack.append(node)
+
+    def handle_endtag(self, tag: str) -> None:
+        assert self.stack[-1]["tag"] == tag
+        self.stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        self.stack[-1]["text"] += data
+
+
+def test_dialog_layout_and_minutes_input() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    assert "ar-unit" not in page.by_id
+    assert page.by_id["ar-value"]["attrs"] == {
+        "id": "ar-value", "class": "field num", "type": "text",
+        "inputmode": "numeric", "maxlength": "2", "aria-label": "Refresh interval",
+    }
+    assert page.by_id["weekly-page"]["attrs"]["inputmode"] == "numeric"
+    footers = {"plan": ["plan-remove", "plan-save"], "settings": ["settings-save"],
+               "reset": ["reset-save"], "weekly": ["weekly-prev", "weekly-next"]}
+    for name in ("plan", "offset", "settings", "info", "reset", "weekly"):
+        dialog = page.by_id[f"{name}-dialog"]
+        assert dialog["tag"] == "dialog"
+        form, = dialog["children"]
+        assert form["attrs"]["class"] == "plan-form"
+        head, body, *footer = form["children"]
+        assert head["attrs"]["class"] == "dialog-head"
+        assert body["attrs"]["class"] == "dialog-body"
+        title, close = head["children"]
+        assert title["tag"] == "h2"
+        assert close["attrs"] == {"id": f"{name}-close", "type": "button",
+                                  "class": "dialog-x", "aria-label": "Close"}
+        assert not close["text"].strip()
+        if name in footers:
+            actions, = footer
+            assert "dialog-actions" in actions["attrs"]["class"].split()
+            buttons = [child for child in actions["children"] if child["tag"] == "button"]
+            assert [button["attrs"]["id"] for button in buttons] == footers[name]
+            assert all(button["text"].strip() != "Close" for button in buttons)
+        else:
+            assert not footer

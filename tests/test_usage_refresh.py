@@ -185,7 +185,7 @@ def test_new_state_roundtrip_and_v051_compatibility(name: str, settings_factory:
     state.plan = Plan("07:00", "daily", True, 9000, None)
     state.plan_outcome = PlanOutcome(1000, "missed", 1100)
     state.resets = ResetCredits(1, [ResetCredit("Full reset", 1000, 20000)], 1200)
-    state.auto_refresh = AutoRefresh(True, 90)
+    state.auto_refresh = AutoRefresh(True, 120)
     state.last_read = ReadRecord(1000, False, "usage reader signed out", True)
     state.manual_resets = [ManualReset("abcdef012345", "Full reset", 5000, 1000)]
     save(scheduler.path, scheduler.states)
@@ -201,8 +201,38 @@ def test_new_state_roundtrip_and_v051_compatibility(name: str, settings_factory:
     assert "using defaults" not in caplog.text
 
 
+@pytest.mark.parametrize("enabled,seconds,expected", [
+    (True, 7200, 3600), (False, 90, 120), (True, 86400, 3600),
+    (True, 89, 60), (False, 91, 120), (True, 60, 60),
+])
+def test_legacy_auto_refresh_normalizes_without_losing_state(
+    enabled: bool, seconds: int, expected: int, settings_factory: Callable[..., Settings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider(), "codex": FakeReader()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    for state in states.values():
+        state.auto_stoke = True
+        state.five_hour, state.weekly, state.limits_at = Window(42, 2000, 300), Window(13, 40000, 10080), 1000
+        state.next_stoke_at = 2090
+        state.plan = Plan("07:00", "daily", True, 9000, None)
+        state.last_stoke = StokeRecord(1000, "manual", True, None, True, 10)
+    save(path, states)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["codex"]["auto_refresh"] = {"enabled": enabled, "seconds": seconds}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    caplog.clear()
+    restored = load(path, settings, providers)
+    states["codex"].auto_refresh = AutoRefresh(enabled, expected)
+    assert restored == states
+    assert "using defaults" not in caplog.text
+
+
 @pytest.mark.parametrize("key,value", [
     ("auto_refresh", None), ("auto_refresh", {"enabled": 1}), ("auto_refresh", {"seconds": True}),
+    ("auto_refresh", {"seconds": 90.0}), ("auto_refresh", {"seconds": "90"}),
     ("auto_refresh", {"seconds": 59}), ("auto_refresh", {"seconds": 86401}),
     ("last_read", []), ("last_read", {"at": 1, "ok": True, "error": [], "signed_out": False}),
     ("manual_resets", None), ("manual_resets", [{}]),
@@ -256,7 +286,7 @@ def test_failed_read_record_persisted(failure: Exception, error: str, signed_out
     assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
 
 
-@pytest.mark.parametrize("enabled,seconds", [(1, 300), (None, 300), (True, True), (True, 60.0), (False, 59), (True, 86401)])
+@pytest.mark.parametrize("enabled,seconds", [(1, 300), (None, 300), (True, True), (True, 60.0), (False, 59), (True, 86401), (True, 90), (True, 3660)])
 def test_auto_refresh_strict_validation(enabled: Any, seconds: Any, settings_factory: Callable[..., Settings]) -> None:
     scheduler = scheduler_for(settings_factory())
     with pytest.raises(ValueError):
@@ -288,11 +318,11 @@ def test_refresh_loop_opt_in_interval_change_disable_and_independence(settings_f
             gate.set_exception(TimeoutError())
             seconds, gate = await original(waits.get(), 0.5)
             assert seconds == 300 and provider.read_calls == 2
-            scheduler.set_auto_refresh("codex", True, 90)
+            scheduler.set_auto_refresh("codex", True, 120)
             gate.set_result(True)
             seconds, gate = await original(waits.get(), 0.5)
-            assert seconds == 90 and provider.read_calls == 3
-            scheduler.set_auto_refresh("codex", False, 90)
+            assert seconds == 120 and provider.read_calls == 3
+            scheduler.set_auto_refresh("codex", False, 120)
             gate.set_result(True)
             await asyncio.sleep(0)
             assert provider.read_calls == 3 and waits.empty()
@@ -346,17 +376,17 @@ def test_refresh_setting_wakes_actual_wait_and_survives_change_during_read(setti
         provider = FakeReader()
         provider.read_release = asyncio.Event()
         scheduler = scheduler_for(settings_factory(), provider)
-        scheduler.set_auto_refresh("codex", True, 86400)
+        scheduler.set_auto_refresh("codex", True, 3600)
         await scheduler.start()
         try:
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
-            scheduler.set_auto_refresh("codex", True, 90)
+            scheduler.set_auto_refresh("codex", True, 120)
             provider.read_started.clear()
             provider.read_release.set()
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
             assert provider.read_calls == 2
             provider.read_started.clear()
-            scheduler.set_auto_refresh("codex", True, 120)
+            scheduler.set_auto_refresh("codex", True, 180)
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
             assert provider.read_calls == 3
         finally:
@@ -386,8 +416,8 @@ def test_refresh_events_are_per_tool_and_busy_start_retries(settings_factory: Ca
             assert codex.read_calls == claude.read_calls == 0
             codex.release.set()
             await asyncio.sleep(0)
-            scheduler.set_auto_refresh("codex", True, 90)
-            assert await original(waits.get(), 0.5) == 90
+            scheduler.set_auto_refresh("codex", True, 120)
+            assert await original(waits.get(), 0.5) == 120
             assert codex.read_calls == 1 and claude.read_calls == 0
             scheduler.set_auto_refresh("claude", True, 60)
             await original(claude.read_started.wait(), 0.5)
@@ -500,9 +530,9 @@ def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Setti
             for action, body in (("auto-refresh", {"enabled": True, "seconds": 90}), ("resets", {"title": "Full reset", "expires_on": "2026-10-20"}), ("resets/remove", {"id": "unknown"})):
                 assert (await client.post(f"/api/tools/claude/{action}", json=body)).status_code == 403
                 assert (await client.post(f"/api/tools/unknown/{action}", headers=HEADERS, json=body)).status_code == 404
-            result = await client.post("/api/tools/claude/auto-refresh", headers=HEADERS, json={"enabled": True, "seconds": 86400})
-            assert result.status_code == 200 and result.json()["auto_refresh"] == {"enabled": True, "seconds": 86400}
-            assert load(scheduler.path, settings, providers)["claude"].auto_refresh == AutoRefresh(True, 86400)
+            result = await client.post("/api/tools/claude/auto-refresh", headers=HEADERS, json={"enabled": True, "seconds": 3600})
+            assert result.status_code == 200 and result.json()["auto_refresh"] == {"enabled": True, "seconds": 3600}
+            assert load(scheduler.path, settings, providers)["claude"].auto_refresh == AutoRefresh(True, 3600)
             result = await client.post("/api/tools/claude/resets", headers=HEADERS, json={"title": "Full reset", "expires_on": "2026-10-20"})
             assert result.status_code == 200
             id = result.json()["manual_resets"][0]["id"]
@@ -519,6 +549,7 @@ def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Setti
     ("auto-refresh", {"enabled": 1, "seconds": 90}), ("auto-refresh", {"enabled": True, "seconds": True}),
     ("auto-refresh", {"enabled": True, "seconds": 90.0}), ("auto-refresh", {"enabled": True, "seconds": 59}),
     ("auto-refresh", {"enabled": False, "seconds": 86401}),
+    ("auto-refresh", {"enabled": True, "seconds": 90}), ("auto-refresh", {"enabled": True, "seconds": 3660}),
     ("resets", {}), ("resets", {"title": "bad", "expires_on": "2026-10-20"}),
     ("resets", {"title": "Full reset", "expires_on": "bad"}), ("resets", {"title": [], "expires_on": "2026-10-20"}),
     ("resets", {"title": "Full reset", "expires_on": "2026-10-20", "extra": 1}),
