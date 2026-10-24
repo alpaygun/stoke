@@ -82,6 +82,13 @@ def parse_date(value: str, key: str) -> date:
         raise ValueError(f"{key} must be YYYY-MM-DD") from None
 
 
+def parse_time(value: str, key: str) -> time:
+    """Require a local time in the exact HH:MM form."""
+    if not isinstance(value, str) or re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value, re.ASCII) is None:
+        raise ValueError(f"{key} must be HH:MM")
+    return time.fromisoformat(value)
+
+
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
     """Read and validate all configuration without revealing secret values."""
     retry = tuple(

@@ -188,6 +188,43 @@ def test_settings_controls_and_no_card_menu() -> None:
     assert not re.search(r"more-menu|menu-pop|menu-separator|moreMenu|autoControl", PAGE)
 
 
+def test_reset_rows_separate_expiry_and_remaining_time() -> None:
+    assert "added by you" not in PAGE
+    assert "reset-source" not in PAGE
+    assert "el('span', '', `expires ${when(credit.expires_at, current)}`)" in PAGE
+    assert "el('span', 'reset-left', `in ${span(left)}`)" in PAGE
+
+
+def test_manual_reset_time_and_edit_dialog() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    form, = page.by_id["reset-dialog"]["children"]
+    _, body, _ = form["children"]
+    expiry, = [child for child in body["children"] if any(
+        node["tag"] == "legend" and node["text"] == "Expires" for node in child["children"]
+    )]
+    _, row = expiry["children"]
+    assert row["attrs"]["class"] == "reset-expiry"
+    assert [child["attrs"]["id"] for child in row["children"]] == ["reset-date", "reset-time"]
+    for name, label, kind in (("reset-date", "Date", "date"), ("reset-time", "Time", "time")):
+        control = page.by_id[name]
+        assert control["tag"] == "input"
+        assert control["attrs"]["type"] == kind
+        assert control["attrs"]["aria-label"] == label
+        assert "required" in control["attrs"]
+    assert page.by_id["reset-time"]["attrs"]["value"] == "23:59"
+    assert "await post(resetTool, editing ? 'resets/update' : 'resets', body)" in PAGE
+    assert "expires_time: document.querySelector('#reset-time').value" in PAGE
+    assert "if (editing) body.id = resetId;" in PAGE
+    assert "const date = localDate(credit.expires_at);" in PAGE
+    assert "document.querySelector('#reset-time').value = clock(credit.expires_at);" in PAGE
+    assert "`${tool.name}:reset-edit:${credit.id}`" in PAGE
+    assert "edit.disabled = busy.has(tool.name);" in PAGE
+    assert "actions.append(edit, remove);" in PAGE
+    assert "credit ? `Edit ${label} limit reset` : `Add a ${label} limit reset`" in PAGE
+    assert "credit ? 'Save' : 'Add'" in PAGE
+
+
 def test_toast_is_a_manual_popover_outside_app() -> None:
     page = ElementParser()
     page.feed(PAGE)

@@ -197,10 +197,14 @@
     .popover-surface { position: absolute; z-index: 10; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); box-shadow: 0 16px 40px var(--popover-shadow-colour); }
     .reset-pop { top: calc(100% + 10px); right: 0; width: min(420px, calc(100vw - 48px)); padding: 14px; }
     .reset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-    .reset-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
+    .reset-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 10px 12px; border-radius: var(--radius-box); background: var(--surface-2); font-size: 13px; }
+    .reset-item .reset-name { min-width: 0; overflow-wrap: anywhere; }
     .reset-item .mono { font-size: 13px; }
+    .reset-item .reset-when { font-size: 12px; }
+    .reset-when { grid-column: 1 / -1; display: flex; justify-content: space-between; flex-wrap: wrap; column-gap: 12px; }
+    .reset-left { margin-left: auto; color: var(--text-3); }
     .reset-item.soon { background: var(--caution-soft); box-shadow: inset 3px 0 0 var(--accent-ink); }
-    .reset-item.soon .reset-when { color: var(--accent-ink); }
+    .reset-item.soon .reset-when, .reset-item.soon .reset-left { color: var(--accent-ink); }
     .reset-note { font-size: 12px; color: var(--text-3); margin-top: 10px; }
     .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: var(--accent-ink); font-size: 13px; }
     .text-button:hover:not(:disabled) { text-decoration: underline; }
@@ -244,9 +248,11 @@
     .weekly-pages .icon-button:disabled { color: var(--text-4); }
     #weekly-prev svg { transform: scaleX(-1); }
 
-    .reset-item .reset-source { font-size: 12px; color: var(--text-3); }
-    .reset-item .text-button { min-height: 24px; font-size: 12px; }
+    .reset-item .text-button { min-height: 24px; margin-block: -4px; font-size: 12px; }
     .reset-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
+    .reset-expiry { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+    .reset-expiry .field { min-width: 0; max-width: 100%; }
+    .reset-actions { grid-column: 2; grid-row: 1; display: flex; gap: 12px; }
     .status-ok { color: var(--text-2); }
     .status-warn { color: var(--accent-ink); }
     .status-bad { color: var(--danger-ink); }
@@ -524,8 +530,14 @@
           <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
           <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
         </fieldset>
-        <label for="reset-date">Expires on <input id="reset-date" class="field" type="date" required></label>
-        <p class="small muted">Copy it from Claude → Settings → Usage → Limit resets. Stoke can't read Claude's resets: remove it here after you use it.</p>
+        <fieldset>
+          <legend>Expires</legend>
+          <div class="reset-expiry">
+            <input id="reset-date" class="field" type="date" aria-label="Date" required>
+            <input type="time" id="reset-time" class="field" aria-label="Time" value="23:59" required>
+          </div>
+        </fieldset>
+        <p class="small muted">Copy the date and time from Claude → Settings → Usage → Limit resets. Keep 23:59 if no time is shown. Stoke can't read Claude's resets: remove it here after you use it.</p>
       </div>
       <div class="dialog-actions">
         <button id="reset-save" type="submit" class="stoke">Add</button>
@@ -903,16 +915,25 @@
       sorted.forEach(credit => {
         const left = credit.expires_at - current, soon = left < RESET_SOON_SECONDS;
         const item = el('li', `reset-item${soon ? ' soon' : ''}`);
-        item.append(el('span', '', credit.title), el('span', 'mono reset-when',
-          `expires ${when(credit.expires_at, current)} · in ${span(left)}`));
+        const expiry = el('span', 'mono reset-when');
+        expiry.append(el('span', '', `expires ${when(credit.expires_at, current)}`),
+          el('span', 'reset-left', `in ${span(left)}`));
+        item.append(el('span', 'reset-name', credit.title), expiry);
         if (resets?.manual) {
+          const actions = el('div', 'reset-actions'), edit = el('button', 'text-button', 'Edit');
+          edit.setAttribute('type', 'button');
+          edit.setAttribute('data-key', `${tool.name}:reset-edit:${credit.id}`);
+          edit.setAttribute('data-tool', tool.name);
+          edit.disabled = busy.has(tool.name);
+          edit.addEventListener('click', () => openReset(tool.name, credit));
           const remove = el('button', 'text-button', 'Remove');
           remove.setAttribute('type', 'button');
           remove.setAttribute('data-key', `${tool.name}:reset-remove:${credit.id}`);
           remove.setAttribute('data-tool', tool.name);
           remove.disabled = busy.has(tool.name);
           remove.addEventListener('click', () => act(tool.name, 'resets/remove', { id: credit.id }));
-          item.append(el('span', 'reset-source', 'added by you'), remove);
+          actions.append(edit, remove);
+          item.append(actions);
         }
         list.append(item);
       });
@@ -1452,12 +1473,21 @@
     });
     const resetDialog = document.querySelector('#reset-dialog');
     const resetForm = document.querySelector('#reset-form');
-    let resetTool = null, resetSaving = false;
-    function openReset(name) {
+    let resetTool = null, resetId = null, resetSaving = false;
+    function openReset(name, credit = null) {
       if (resetSaving) return;
       resetTool = name;
+      resetId = credit?.id ?? null;
       resetForm.reset();
-      document.querySelector('#reset-title').textContent = `Add a ${state.tools[name].label} limit reset`;
+      if (credit) {
+        resetForm.querySelectorAll('[name="reset-type"]').forEach(input => { input.checked = input.value === credit.title; });
+        const date = localDate(credit.expires_at);
+        document.querySelector('#reset-date').value = `${date.year}-${pad(date.month)}-${pad(date.day)}`;
+        document.querySelector('#reset-time').value = clock(credit.expires_at);
+      }
+      const label = state.tools[name].label;
+      document.querySelector('#reset-title').textContent = credit ? `Edit ${label} limit reset` : `Add a ${label} limit reset`;
+      document.querySelector('#reset-save').textContent = credit ? 'Save' : 'Add';
       dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
       openDialog(resetDialog);
     }
@@ -1465,16 +1495,18 @@
     resetForm.addEventListener('submit', async event => {
       event.preventDefault();
       if (resetSaving) return;
-      const body = { title: resetForm.querySelector('[name="reset-type"]:checked').value, expires_on: document.querySelector('#reset-date').value };
+      const body = { title: resetForm.querySelector('[name="reset-type"]:checked').value, expires_on: document.querySelector('#reset-date').value, expires_time: document.querySelector('#reset-time').value };
+      const editing = resetId !== null;
+      if (editing) body.id = resetId;
       resetSaving = true;
       resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = true; });
       try {
-        await post(resetTool, 'resets', body);
+        await post(resetTool, editing ? 'resets/update' : 'resets', body);
         await refresh();
         resetDialog.close();
-        toast('ok', 'Reset added');
+        toast('ok', editing ? 'Reset updated' : 'Reset added');
       } catch (failure) {
-        toast('fail', `Couldn't add the reset: ${failure.message}`);
+        toast('fail', `Couldn't ${editing ? 'update' : 'add'} the reset: ${failure.message}`);
       } finally {
         resetSaving = false;
         resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = false; });

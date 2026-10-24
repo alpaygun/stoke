@@ -11,7 +11,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from . import clock, store
-from .config import Settings, parse_date
+from .config import Settings, parse_date, parse_time
 from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
@@ -372,22 +372,42 @@ class Scheduler:
             raise ManualResetsUnsupported(name)
         return self.states[name]
 
-    def add_manual_reset(self, name: str, title: str, expires_on: str) -> ToolState:
-        """Record a user-supplied credit through 23:59 of its local date."""
-        state = self._manual_state(name)
+    def _manual_expiry(self, title: str, expires_on: str, expires_time: str, now: int) -> int:
+        """Validate a user-supplied title and future local expiry."""
         if not isinstance(title, str) or title not in MANUAL_RESET_TITLES:
             raise ValueError("title must be Full reset or 5-hour reset")
         expires_at = int(datetime.combine(
-            parse_date(expires_on, "expires_on"), local_time(23, 59), self.settings.timezone,
+            parse_date(expires_on, "expires_on"), parse_time(expires_time, "expires_time"), self.settings.timezone,
         ).timestamp())
-        now = clock.now()
         if expires_at <= now:
             raise ValueError("expiry must be in the future")
+        return expires_at
+
+    def add_manual_reset(self, name: str, title: str, expires_on: str, expires_time: str = "23:59") -> ToolState:
+        """Record a user-supplied credit with a local expiry date and time."""
+        state = self._manual_state(name)
+        now = clock.now()
+        expires_at = self._manual_expiry(title, expires_on, expires_time, now)
         entries = [entry for entry in state.manual_resets if entry.expires_at > now]
         if len(entries) >= 10:
             raise ValueError("at most 10 manual resets are allowed")
         entries.append(ManualReset(uuid4().hex[:12], title, expires_at, now))
         state.manual_resets = sorted(entries, key=lambda entry: entry.expires_at)
+        self._persist()
+        return state
+
+    def update_manual_reset(self, name: str, id: str, title: str, expires_on: str, expires_time: str) -> ToolState:
+        """Edit a live credit without changing its identity or added time."""
+        state = self._manual_state(name)
+        now = clock.now()
+        entries = [entry for entry in state.manual_resets if entry.expires_at > now]
+        if not isinstance(id, str) or not any(entry.id == id for entry in entries):
+            raise ValueError("manual reset id not found")
+        expires_at = self._manual_expiry(title, expires_on, expires_time, now)
+        state.manual_resets = sorted(
+            [replace(entry, title=title, expires_at=expires_at) if entry.id == id else entry for entry in entries],
+            key=lambda entry: entry.expires_at,
+        )
         self._persist()
         return state
 

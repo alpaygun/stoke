@@ -16,7 +16,7 @@ import pytest
 from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings, load_settings
-from stoke.models import AutoRefresh, LimitsSnapshot, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, Window, serialize_tool
+from stoke.models import AutoRefresh, LimitsSnapshot, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, Window, serialize_tool, validate_plan
 from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut
 from stoke.providers.claude import ClaudeProvider
@@ -473,9 +473,74 @@ def test_manual_reset_invalid(title: Any, date: Any, settings_factory: Callable[
     assert scheduler.states["claude"].manual_resets == []
 
 
+@pytest.mark.parametrize("time,utc", [
+    (None, "2026-10-20T20:59:00+00:00"),
+    ("00:00", "2026-10-19T21:00:00+00:00"),
+    ("09:30", "2026-10-20T06:30:00+00:00"),
+    ("23:59", "2026-10-20T20:59:00+00:00"),
+])
+def test_manual_reset_local_time(time: str | None, utc: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
+    scheduler = scheduler_for(settings_factory(STOKE_TIMEZONE="Europe/Istanbul"), FakeProvider())
+    times = () if time is None else (time,)
+    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", *times)
+    assert state.manual_resets[0].expires_at == int(datetime.fromisoformat(utc).timestamp())
+    assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
+
+
+@pytest.mark.parametrize("time", ["24:00", "9:30", "09:60", "09:30:00", " 09:30", "０９:３０", "", None, 930])
+def test_manual_reset_and_plan_invalid_time(time: Any, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
+    scheduler = scheduler_for(settings_factory(), FakeProvider())
+    with pytest.raises(ValueError, match="^expires_time must be HH:MM$"):
+        scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", time)
+    with pytest.raises(ValueError, match="^time must be HH:MM$"):
+        validate_plan(time, "once", None)
+
+
+def test_manual_reset_update_identity_sort_prune_persist(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    current = [EPOCH]
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+    scheduler = scheduler_for(settings_factory(), FakeProvider())
+    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", "09:30")
+    original = replace(state.manual_resets[0])
+    scheduler.add_manual_reset("claude", "Full reset", "2026-10-19")
+    state.manual_resets.append(ManualReset("expired", "Full reset", EPOCH, EPOCH - 1))
+    current[0] += 60
+    result = scheduler.update_manual_reset("claude", original.id, "5-hour reset", "2026-10-18", "10:15")
+    assert result is state
+    assert state.manual_resets[0] == ManualReset(
+        original.id, "5-hour reset", int(datetime.fromisoformat("2026-10-18T07:15:00+00:00").timestamp()), original.added_at,
+    )
+    assert len(state.manual_resets) == 2
+    assert state.manual_resets[0].expires_at < state.manual_resets[1].expires_at
+    assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
+
+
+def test_manual_reset_update_at_capacity(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
+    scheduler = scheduler_for(settings_factory(), FakeProvider())
+    for _ in range(10):
+        state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20")
+    original = replace(state.manual_resets[-1])
+    scheduler.update_manual_reset("claude", original.id, "5-hour reset", "2026-10-19", "12:00")
+    assert len(state.manual_resets) == 10
+    assert state.manual_resets[0].id == original.id
+    assert state.manual_resets[0].added_at == original.added_at
+
+
+@pytest.mark.parametrize("id", ["unknown", "expired"])
+def test_manual_reset_update_unknown_or_expired(id: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
+    scheduler = scheduler_for(settings_factory(), FakeProvider())
+    scheduler.states["claude"].manual_resets = [ManualReset("expired", "Full reset", EPOCH, EPOCH - 1)]
+    with pytest.raises(ValueError, match="^manual reset id not found$"):
+        scheduler.update_manual_reset("claude", id, "Full reset", "2026-10-20", "12:00")
+
+
 def test_manual_reset_unsupported(settings_factory: Callable[..., Settings]) -> None:
     scheduler = scheduler_for(settings_factory())
-    for operation in (lambda: scheduler.add_manual_reset("codex", "Full reset", "2026-10-20"), lambda: scheduler.remove_manual_reset("codex", "a")):
+    for operation in (lambda: scheduler.add_manual_reset("codex", "Full reset", "2026-10-20"), lambda: scheduler.update_manual_reset("codex", "a", "Full reset", "2026-10-20", "12:00"), lambda: scheduler.remove_manual_reset("codex", "a")):
         with pytest.raises(ManualResetsUnsupported):
             operation()
 

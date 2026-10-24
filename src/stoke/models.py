@@ -1,9 +1,10 @@
 """Shared data contract and its single JSON serializer."""
 
-import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
+
+from .config import parse_time
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -14,8 +15,7 @@ PlanResult = Literal["done", "missed", "broken"]
 
 def validate_plan(time: str, repeat: PlanRepeat, auto_after: bool | None) -> None:
     """Require a local HH:MM time and strict plan options."""
-    if not isinstance(time, str) or re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time, re.ASCII) is None:
-        raise ValueError("time must be HH:MM")
+    parse_time(time, "time")
     if not isinstance(repeat, str) or repeat not in {"once", "daily"}:
         raise ValueError("repeat must be once or daily")
     if auto_after is not None and type(auto_after) is not bool:

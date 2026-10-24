@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -147,22 +147,36 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
 
     @app.post("/api/tools/{name}/resets")
     async def add_reset(name: str, request: Request) -> dict[str, Any]:
-        return await change_reset(name, request, remove=False)
+        return await change_reset(name, request, action="add")
+
+    @app.post("/api/tools/{name}/resets/update")
+    async def update_reset(name: str, request: Request) -> dict[str, Any]:
+        return await change_reset(name, request, action="update")
 
     @app.post("/api/tools/{name}/resets/remove")
     async def remove_reset(name: str, request: Request) -> dict[str, Any]:
-        return await change_reset(name, request, remove=True)
+        return await change_reset(name, request, action="remove")
 
-    async def change_reset(name: str, request: Request, *, remove: bool) -> dict[str, Any]:
+    async def change_reset(name: str, request: Request, *, action: Literal["add", "update", "remove"]) -> dict[str, Any]:
         require_tool(name)
         if not scheduler.providers[name].manual_resets:
             raise HTTPException(404, "manual resets not supported")
         try:
             body = await request.json()
-            keys = {"id"} if remove else {"title", "expires_on"}
-            if not isinstance(body, dict) or set(body) != keys or any(not isinstance(value, str) for value in body.values()):
-                raise ValueError("body must contain exactly " + ("id: str" if remove else "title: str and expires_on: YYYY-MM-DD"))
-            state = scheduler.remove_manual_reset(name, body["id"]) if remove else scheduler.add_manual_reset(name, body["title"], body["expires_on"])
+            keys = {"id"} if action == "remove" else {"title", "expires_on"}
+            optional = {"expires_time"} if action == "add" else set()
+            fields = "id: str" if action == "remove" else "title: str and expires_on: YYYY-MM-DD, with optional expires_time: HH:MM"
+            if action == "update":
+                keys |= {"id", "expires_time"}
+                fields = "id: str, title: str, expires_on: YYYY-MM-DD and expires_time: HH:MM"
+            if not isinstance(body, dict) or not keys <= set(body) <= keys | optional or any(not isinstance(value, str) for value in body.values()):
+                raise ValueError("body must contain exactly " + fields)
+            if action == "remove":
+                state = scheduler.remove_manual_reset(name, body["id"])
+            elif action == "update":
+                state = scheduler.update_manual_reset(name, body["id"], body["title"], body["expires_on"], body["expires_time"])
+            else:
+                state = scheduler.add_manual_reset(name, body["title"], body["expires_on"], body.get("expires_time", "23:59"))
         except ManualResetsUnsupported:
             raise HTTPException(404, "manual resets not supported") from None
         except ValueError as error:
