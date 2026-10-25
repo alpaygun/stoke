@@ -27,6 +27,7 @@ Stoke sends one tiny message (`hi`) through the official CLI the moment a window
 | **Window offset** | With both tools on, the header shows the gap between their windows and suggests one-click plans that move them 2.5 h apart, so one of them always resets soon. |
 | **Limit resets** | Codex reset credits are read and listed with their expiry. Claude's cannot be read; you can enter them by hand as a reminder. Stoke never spends a credit. |
 | **Early weekly resets** | When a provider resets the weekly limit early, the panel shows a note and keeps the history (Info). |
+| **Early window resets** | For tools whose resets restart the window (Codex), a threshold chooses an immediate stoke or a wait to preserve the offset. Claude resets only usage and keeps its schedule. |
 | **Warnings** | A short line above the cards when something needs attention; see [Warnings](#warnings). |
 
 Only the official, unmodified `claude` and `codex` binaries talk to the providers. Stoke never calls a provider API with your credentials.
@@ -122,6 +123,7 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 - **Settings** (sliders icon) and **Info** (info icon) are buttons in each card's header.
 - The **Auto-stoke** switch in the card's **Settings** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
 - **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (1 to 60 whole minutes).
+- **After an early reset** in **Settings** applies to tools whose resets restart the window (Codex): wait near the old end to preserve the offset (0–300 minutes, default 30; 0 stokes at once when auto-stoke is on). Claude resets only usage and keeps its schedule.
 - **Info** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
 - **Limit resets** on the card opens the list of available resets.
 - **Plan a stoke** sets a start time. In the 5 hours before it, automatic stokes wait; a manual stoke asks before it skips the plan. A plan is refused if the current window would still be open at that time.

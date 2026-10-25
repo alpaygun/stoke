@@ -17,6 +17,206 @@ from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
 from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, PlanUnreachable, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
+from stoke.scheduler import detect_window_reset, known_window, reset_next
+
+
+@pytest.mark.parametrize("previous,current,observed,expected", [
+    (Window(10, 2000, 300), 5, 1000, True),
+    (Window(10, 2000, 300), 6, 1000, False),
+    (Window(10, 2000, 300), 5, 2000, False),
+    (Window(10, 2000, 300), 5, 2001, False),
+    (None, 0, 1000, False),
+])
+def test_early_reset_detection_boundaries(previous: Window | None, current: float, observed: int, expected: bool) -> None:
+    assert detect_window_reset(previous, current, observed) is expected
+
+
+@pytest.mark.parametrize("end,minutes,expected", [(2799, 30, 2889), (2800, 30, 2890), (2801, 30, 1000), (1001, 0, 1000), (19000, 300, 19090)])
+def test_early_reset_next_threshold(end: int, minutes: int, expected: int, settings_factory: Callable[..., Settings]) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeProvider())
+    state = scheduler.states["claude"]
+    state.five_hour, state.reset_hold_minutes = Window(1, end, 300), minutes
+    assert reset_next(state, 1000, scheduler.settings) == expected
+
+
+@pytest.mark.parametrize("end,expected", [(2800, 2890), (2801, "stoke_now"), (1000, "stoke_now")])
+def test_early_reset_startup_survives_restart(
+    end: int, expected: str | int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        provider = FakeReader()
+        scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["codex"]
+        state.five_hour, state.window_closed_at = Window(1, end, 300), 999
+        save(scheduler.path, scheduler.states)
+        scheduler.states = load(scheduler.path, scheduler.settings, scheduler.providers)
+        state = scheduler.states["codex"]
+        assert startup_decision(state, 1000, scheduler.settings) == expected
+        await scheduler.start()
+        assert state.next_stoke_at == (1000 if expected == "stoke_now" else expected)
+        if expected == "stoke_now":
+            await asyncio.wait_for(provider.started.wait(), 1)
+            assert state.last_stoke.trigger == "startup"
+        else:
+            await asyncio.sleep(0)
+            assert provider.calls == 0
+        await scheduler.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("new_end,opened", [(15400, True), (15399, False), (4600, False)])
+def test_early_reset_success_clears_marker_and_assesses_window(
+    new_end: int, opened: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeProvider(result=StokeResult(Window(1, new_end, 300), None, 12))
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at = Window(40, 19000, 300), 1000
+    asyncio.run(scheduler.stoke_now("claude", "reset"))
+    assert state.window_closed_at is None
+    assert state.five_hour == provider.result.five_hour
+    assert state.last_stoke.opened_new_window is opened
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+
+
+@pytest.mark.parametrize("new_end,expected,unchanged", [
+    (5880, None, True), (6000, None, True), (6120, None, True),
+    (5400, None, True), (6600, None, True),
+    (5399, False, False), (6601, False, False),
+    (15400, True, False), (19000, True, False),
+])
+def test_early_reset_unchanged_window_end_skips_assessment(
+    new_end: int, expected: bool | None, unchanged: bool,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeProvider(result=StokeResult(Window(1, new_end, 300), None, 12))
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at = Window(40, 6000, 300), 1000
+    asyncio.run(scheduler.stoke_now("claude", "reset"))
+    assert state.last_stoke.ok and state.last_stoke.opened_new_window is expected
+    assert state.warning == ("did_not_open_window" if expected is False else None)
+    messages = [record.getMessage() for record in caplog.records if "window was not reset" in record.getMessage()]
+    assert messages == (["tool=claude window was not reset"] if unchanged else [])
+    assert all(record.levelname == "INFO" for record in caplog.records if "window was not reset" in record.getMessage())
+    assert state.window_closed_at is None and state.five_hour == provider.result.five_hour
+    assert state.next_stoke_at == new_end + scheduler.settings.delay_seconds
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+
+
+@pytest.mark.parametrize("attempt_at", [1000, 1090])
+def test_early_reset_hold_skips_new_window_assessment(
+    attempt_at: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: attempt_at)
+    provider = FakeProvider(result=StokeResult(Window(1, attempt_at + 3 * 3600, 300), None, 12))
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at, state.next_stoke_at = Window(40, 1000, 300), 900, 1090
+    asyncio.run(scheduler.stoke_now("claude", "auto"))
+    assert state.last_stoke.ok and state.last_stoke.opened_new_window is None
+    assert state.warning is None
+
+
+@pytest.mark.parametrize("result", [ProviderError("failed"), LimitsUnreadable("unreadable"), StokeResult(Window(1, 1000, 300), None, 1)])
+def test_early_reset_failure_keeps_marker(
+    result: StokeResult | Exception, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    scheduler = make_scheduler(settings_factory(), FakeProvider(result=result))
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at = Window(40, 19000, 300), 999
+    asyncio.run(scheduler.stoke_now("claude", "reset"))
+    assert not state.last_stoke.ok and state.window_closed_at == 999
+    assert state.five_hour == Window(40, 19000, 300)
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+
+
+def test_early_reset_plan_quiet_zone_and_known_window(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), FakeProvider())
+    state = scheduler.states["claude"]
+    state.five_hour, state.next_stoke_at = Window(40, 20000, 300), 1000
+    assert known_window(state) is state.five_hour
+    state.window_closed_at = 1000
+    assert known_window(state) is None
+    scheduler.set_plan("claude", "07:00", "once", None)
+    assert state.plan.target_at == 18000
+    assert effective_next(state, scheduler.settings) == (18000, True)
+    assert not scheduler._expire_plan(state, 18900)
+    assert scheduler._expire_plan(state, 18901)
+    assert state.plan_outcome.result == "missed"
+
+
+def test_early_reset_plan_retry_deadline_ignores_old_end(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    scheduler = make_scheduler(settings_factory(), FakeProvider(result=ProviderError("failed")))
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at = Window(40, 19000, 300), 999
+    state.plan = Plan("03:20", "once", None, 100, None)
+    asyncio.run(scheduler.stoke_now("claude", "planned"))
+    assert state.plan is None and state.plan_outcome.result == "missed"
+
+
+@pytest.mark.parametrize("closed,auto,running,recompute", [(True, True, False, True), (False, True, False, False), (True, False, False, False), (True, True, True, False)])
+def test_early_reset_setting_recomputes_only_when_idle_and_auto(
+    closed: bool, auto: bool, running: bool, recompute: bool,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    scheduler = make_scheduler(settings_factory(), FakeReader())
+    state = scheduler.states["codex"]
+    state.five_hour, state.window_closed_at = Window(40, 2800, 300), 999 if closed else None
+    state.auto_stoke, state.running = auto, running
+    state.next_stoke_at = 2890 if auto else None
+    before = state.next_stoke_at
+    scheduler.set_reset_hold("codex", 0)
+    assert state.next_stoke_at == (1000 if recompute else before)
+    assert scheduler.events["codex"].is_set() is recompute
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["codex"].reset_hold_minutes == 0
+    if recompute:
+        scheduler.events["codex"].clear()
+        scheduler.set_reset_hold("codex", 30)
+        assert state.next_stoke_at == 2890 and scheduler.events["codex"].is_set()
+
+
+@pytest.mark.parametrize("end,next_at", [(None, 1060), (999, 1300), (1000, 1090), (1000, 1300)])
+def test_early_reset_setting_preserves_schedule_after_old_end(
+    end: int | None, next_at: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), FakeReader())
+    state = scheduler.states["codex"]
+    state.five_hour = None if end is None else Window(40, end, 300)
+    state.window_closed_at, state.next_stoke_at = 900, next_at
+    scheduler.set_reset_hold("codex", 0)
+    assert state.next_stoke_at == next_at
+    assert not scheduler.events["codex"].is_set()
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["codex"] == state
+
+
+@pytest.mark.parametrize("minutes", [True, False, -1, 301, "30", 30.0, None])
+def test_early_reset_setting_strict_validation(minutes: object, settings_factory: Callable[..., Settings]) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeReader())
+    with pytest.raises(ValueError):
+        scheduler.set_reset_hold("codex", minutes)
+    assert scheduler.states["codex"].reset_hold_minutes == 30
+    assert not scheduler.path.exists()
+
+
+def test_early_reset_setting_requires_reader(settings_factory: Callable[..., Settings]) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeProvider())
+    with pytest.raises(RefreshUnsupported):
+        scheduler.set_reset_hold("claude", 30)
 
 
 def make_scheduler(settings: Settings, provider: FakeProvider) -> Scheduler:

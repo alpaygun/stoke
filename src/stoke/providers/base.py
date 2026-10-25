@@ -41,6 +41,7 @@ class Provider(Protocol):
     name: str
     label: str
     manual_resets: bool
+    reset_closes_window: bool
     auth_labels: dict[str, dict[str, str]]
 
     async def stoke(self) -> StokeResult: ...

@@ -107,8 +107,7 @@ def test_weekly_refresh_acceptance_and_scheduling(
     observed: int, name: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("stoke.clock.now", lambda: 1000)
-    provider = FakeReader()
-    provider.name = name
+    provider = FakeReader(name)
     provider.read_result = LimitsSnapshot(Window(8, 99999, 300), NEW_WEEK, None, observed)
     scheduler = make_scheduler(settings_factory(), provider)
     state = scheduler.states[name]
@@ -117,6 +116,7 @@ def test_weekly_refresh_acceptance_and_scheduling(
     before = deepcopy(state)
     asyncio.run(scheduler.refresh_limits(name))
     assert len(state.weekly_resets) == (0 if observed < 900 else 1)
+    assert state.window_closed_at == (min(observed, 1000) if name == "codex" and observed >= 900 else None)
     assert (state.five_hour.resets_at, state.next_stoke_at, state.consecutive_failures, state.stale_resets,
             state.plan, state.plan_outcome, state.auto_stoke, state.warning) == (
         before.five_hour.resets_at, before.next_stoke_at, before.consecutive_failures, before.stale_resets,

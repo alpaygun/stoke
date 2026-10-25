@@ -14,6 +14,7 @@ class ProviderFactory(Protocol):
     """A provider constructor with capabilities available before instantiation."""
 
     manual_resets: bool
+    reset_closes_window: bool
     auth_labels: dict[str, dict[str, str]]
 
     def __call__(self, settings: Settings, runner: Runner) -> Provider: ...
@@ -32,7 +33,8 @@ def create_providers(settings: Settings, runner: Runner = run_command) -> dict[s
         label, factory = FACTORIES[name]
         dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
         providers[name] = (
-            dry_factory(name, label, settings, manual_resets=factory.manual_resets, auth_labels=factory.auth_labels)
+            dry_factory(name, label, settings, manual_resets=factory.manual_resets,
+                        reset_closes_window=factory.reset_closes_window, auth_labels=factory.auth_labels)
             if settings.dry_run else factory(settings, runner)
         )
     return providers

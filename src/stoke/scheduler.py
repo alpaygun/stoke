@@ -16,13 +16,15 @@ from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOut
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
 logger = logging.getLogger(__name__)
-Trigger = Literal["auto", "manual", "startup", "planned"]
+Trigger = Literal["auto", "manual", "startup", "planned", "reset"]
 STALE_RESET_LIMIT = 4
 REFRESH_BUSY_RETRY_SECONDS = 10
 PLAN_QUIET_SECONDS = 5 * 3600
 PLAN_GRACE_SECONDS = 900
 WEEKLY_SHIFT_SECONDS = 86400
 WEEKLY_DROP_POINTS = 10
+FIVE_HOUR_DROP_POINTS = 5
+RESET_HOLD_MAX_MINUTES = 300
 
 
 class AlreadyRunning(Exception):
@@ -83,7 +85,20 @@ def effective_next(state: ToolState, settings: Settings) -> tuple[int | None, bo
         return base, False
     if base is not None and base < plan.target_at - PLAN_QUIET_SECONDS:
         return base, False
-    return plan_due(plan, state.five_hour, settings.delay_seconds), True
+    return plan_due(plan, known_window(state), settings.delay_seconds), True
+
+
+def known_window(state: ToolState) -> Window | None:
+    """Exclude a window known to have closed before its stored end."""
+    return None if state.window_closed_at is not None else state.five_hour
+
+
+def reset_next(state: ToolState, now: int, settings: Settings) -> int:
+    """Preserve a nearby window end; otherwise restart immediately."""
+    assert state.five_hour is not None
+    if state.five_hour.resets_at - now <= state.reset_hold_minutes * 60:
+        return state.five_hour.resets_at + settings.delay_seconds
+    return now
 
 
 def in_quiet_zone(plan: Plan, now: int) -> bool:
@@ -105,6 +120,9 @@ def next_after_failure(now: int, consecutive_failures: int, settings: Settings) 
 def startup_decision(state: ToolState, now: int, settings: Settings) -> Literal["stoke_now"] | int:
     """Reuse a future window; otherwise stoke immediately."""
     if state.five_hour is not None and state.five_hour.resets_at > now:
+        if state.window_closed_at is not None:
+            next_at = reset_next(state, now, settings)
+            return "stoke_now" if next_at <= now else next_at
         return state.five_hour.resets_at + settings.delay_seconds
     return "stoke_now"
 
@@ -118,6 +136,14 @@ def opened_new_window(
     if not previous_five_hour.resets_at <= attempt_at <= previous_five_hour.resets_at + 900:
         return None
     return new_five_hour.resets_at >= attempt_at + 4 * 3600
+
+
+def detect_window_reset(previous: Window | None, current_used: float, observed_at: int) -> bool:
+    """Detect a substantial usage drop before the stored window ends."""
+    return (
+        previous is not None and previous.resets_at > observed_at
+        and previous.used_percent - current_used >= FIVE_HOUR_DROP_POINTS
+    )
 
 
 def detect_weekly_reset(
@@ -164,6 +190,7 @@ class Scheduler:
         settings: Settings, path: Path | None = None,
     ) -> None:
         self.providers = dict(providers)
+        self.reset_closes_window = {name: getattr(provider, "reset_closes_window", True) for name, provider in providers.items()}
         self.readers = {
             name: cast(LimitReader, provider) for name, provider in providers.items()
             if callable(getattr(provider, "read_limits", None))
@@ -205,7 +232,7 @@ class Scheduler:
     def _expire_plan(self, state: ToolState, now: int) -> bool:
         closed = False
         while state.plan is not None and not state.running:
-            if now <= plan_deadline(state.plan, state.five_hour, self.settings.delay_seconds):
+            if now <= plan_deadline(state.plan, known_window(state), self.settings.delay_seconds):
                 break
             self._close_occurrence(state, "missed", now)
             closed = True
@@ -274,7 +301,7 @@ class Scheduler:
             logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
 
     async def refresh_limits(self, name: str) -> ToolState:
-        """Update usage only; a read must never determine stoke scheduling."""
+        """Update usage and close a stored window after an early reset."""
         if name not in self.readers:
             raise RefreshUnsupported(name)
         state = self.states[name]
@@ -302,14 +329,28 @@ class Scheduler:
             now = clock.now()
             state.last_read = ReadRecord(now, True, None, False)
             observed = min(snapshot.observed_at, now) if snapshot.observed_at is not None else now
+            kept_window = False
             if state.limits_at is None or observed >= state.limits_at:
+                window_reset = detect_window_reset(state.five_hour, snapshot.five_hour.used_percent, observed)
+                weekly_reset = False
+                if snapshot.weekly is not None:
+                    weekly_reset = self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
+                    state.weekly = snapshot.weekly
+                if ((weekly_reset or window_reset) and state.window_closed_at is None
+                        and state.five_hour is not None and state.five_hour.resets_at > observed):
+                    if self.reset_closes_window[name]:
+                        state.window_closed_at = observed
+                        next_at = reset_next(state, now, self.settings)
+                        logger.info("tool=%s window reset detected decision=%s", name, "hold" if next_at > now else "now")
+                        if state.auto_stoke:
+                            state.next_stoke_at = next_at
+                            self.events[name].set()
+                    else:
+                        kept_window = True
                 if state.five_hour is not None:
                     state.five_hour = Window(
                         snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
                     )
-                if snapshot.weekly is not None:
-                    self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
-                    state.weekly = snapshot.weekly
                 state.limits_at = observed
                 if snapshot.resets is not None:
                     for entry in state.weekly_resets:
@@ -318,6 +359,15 @@ class Scheduler:
                                 entry.kind = "credit"
                             entry.credits_before = None
                     state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
+            if kept_window or state.window_closed_at is not None:
+                try:
+                    resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
+                except (OverflowError, OSError, ValueError):
+                    resets_at = "out-of-range"
+                if kept_window:
+                    logger.info("tool=%s reset detected, window kept read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
+                else:
+                    logger.info("tool=%s read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
             self._persist()
             return state
         finally:
@@ -365,6 +415,22 @@ class Scheduler:
         state.auto_refresh = AutoRefresh(enabled, seconds)
         self._persist()
         self.refresh_events[name].set()
+        return state
+
+    def set_reset_hold(self, name: str, minutes: int) -> ToolState:
+        """Persist the early-reset threshold and reconsider a waiting stoke."""
+        if name not in self.readers or not self.reset_closes_window[name]:
+            raise RefreshUnsupported(name)
+        if type(minutes) is not int or not 0 <= minutes <= RESET_HOLD_MAX_MINUTES:
+            raise ValueError("minutes must be an integer between 0 and 300")
+        state = self.states[name]
+        state.reset_hold_minutes = minutes
+        now = clock.now()
+        if (state.window_closed_at is not None and state.auto_stoke and not state.running
+                and state.five_hour is not None and state.five_hour.resets_at > now):
+            state.next_stoke_at = reset_next(state, now, self.settings)
+            self.events[name].set()
+        self._persist()
         return state
 
     def _manual_state(self, name: str) -> ToolState:
@@ -454,8 +520,9 @@ class Scheduler:
         validate_plan(time, repeat, auto_after)
         state = self.states[name]
         target = first_target(time, clock.now(), self.settings.timezone)
-        if state.five_hour is not None and state.five_hour.resets_at > target:
-            end = datetime.fromtimestamp(state.five_hour.resets_at, self.settings.timezone).strftime("%H:%M")
+        window = known_window(state)
+        if window is not None and window.resets_at > target:
+            end = datetime.fromtimestamp(window.resets_at, self.settings.timezone).strftime("%H:%M")
             raise PlanUnreachable(f"window open until {end}, so {time} cannot be reached")
         state.plan = Plan(time, repeat, auto_after, target, None)
         self._persist()
@@ -488,7 +555,11 @@ class Scheduler:
             if task is not None:
                 self._attempts.add(task)
             started = time.perf_counter()
-            previous = state.five_hour
+            original = state.five_hour
+            closed_at = state.window_closed_at
+            previous = original
+            if closed_at is not None and previous is not None:
+                previous = replace(previous, resets_at=closed_at) if attempt_at < previous.resets_at else None
             auto_stopped = state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke
             state.running = True
             self._startup_pending[name] = False
@@ -513,7 +584,14 @@ class Scheduler:
                         if result.weekly is not None:
                             detected = self._record_weekly_reset(state, result.weekly, completed_at)
                             follow_up = detected and state.resets is not None
+                        if (closed_at is not None and original is not None and attempt_at < original.resets_at
+                                and abs(result.five_hour.resets_at - original.resets_at) <= 600):
+                            opened = None
+                            logger.info("tool=%s window was not reset", name)
+                        else:
+                            opened = opened_new_window(previous, attempt_at, result.five_hour)
                         state.five_hour = result.five_hour
+                        state.window_closed_at = None
                         state.weekly = result.weekly
                         state.limits_at = completed_at
                         state.consecutive_failures = 0
@@ -527,14 +605,13 @@ class Scheduler:
                                 state.auto_stoke = auto_after
                                 state.stale_resets = 0
                         state.last_stoke = StokeRecord(
-                            attempt_at, trigger, True, None,
-                            opened_new_window(previous, attempt_at, result.five_hour), result.duration_ms,
+                            attempt_at, trigger, True, None, opened, result.duration_ms,
                         )
                         state.next_stoke_at = next_after_success(result, self.settings) if state.auto_stoke else None
                 if attempt_plan is not None and state.plan is attempt_plan and state.last_stoke is not None and not state.last_stoke.ok:
                     now = clock.now()
                     retry = next_after_failure(now, state.consecutive_failures, self.settings)
-                    if retry > plan_deadline(attempt_plan, state.five_hour, self.settings.delay_seconds):
+                    if retry > plan_deadline(attempt_plan, known_window(state), self.settings.delay_seconds):
                         self._close_occurrence(state, "missed", now)
                     else:
                         attempt_plan.retry_at = retry
@@ -606,6 +683,8 @@ class Scheduler:
                         pass
                     continue
                 trigger: Trigger = "planned" if planned else "startup" if self._startup_pending[name] else "auto"
+                if trigger == "auto" and state.window_closed_at is not None and state.five_hour is not None and now < state.five_hour.resets_at:
+                    trigger = "reset"
                 try:
                     await self.stoke_now(name, trigger)
                 except AlreadyRunning:

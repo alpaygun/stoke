@@ -17,12 +17,14 @@ class DryRunProvider:
         self, name: str, label: str, settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         *, manual_resets: bool = False, auth_labels: dict[str, dict[str, str]] | None = None,
+        reset_closes_window: bool = True,
     ) -> None:
         self.name = name
         self.label = label
         self.settings = settings
         self.sleep = sleep
         self.manual_resets = manual_resets
+        self.reset_closes_window = reset_closes_window
         self.auth_labels = {key: dict(value) for key, value in (auth_labels or {}).items()}
 
     async def stoke(self) -> StokeResult:

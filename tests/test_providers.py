@@ -493,6 +493,29 @@ def test_registry_default_and_enabled_order(settings_factory: Callable[..., Sett
     assert list(real) == ["codex"] and isinstance(real["codex"], CodexProvider)
 
 
+@pytest.mark.parametrize("dry_run", ["0", "1"])
+def test_reset_provider_capability_registry_values(dry_run: str, settings_factory: Callable[..., Settings]) -> None:
+    providers = create_providers(settings_factory(STOKE_DRY_RUN=dry_run))
+    assert providers["claude"].reset_closes_window is False
+    assert providers["codex"].reset_closes_window is True
+
+
+@pytest.mark.parametrize("factory", [DryRunProvider, DryRunReader])
+def test_reset_provider_capability_dry_run_default_and_keyword(
+    factory: type[DryRunProvider], settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    assert factory("claude", "Claude", settings).reset_closes_window is True
+    assert factory("claude", "Claude", settings, reset_closes_window=False).reset_closes_window is False
+
+
+def test_reset_provider_capability_dry_run_uses_registry_flag(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ClaudeProvider, "reset_closes_window", True)
+    assert create_providers(settings_factory())["claude"].reset_closes_window is True
+
+
 def test_dry_run_window_and_injected_failure(
     settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:

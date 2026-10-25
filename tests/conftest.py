@@ -19,6 +19,7 @@ class FakeProvider:
         self.name = name
         real = ClaudeProvider if name == "claude" else CodexProvider
         self.manual_resets = real.manual_resets
+        self.reset_closes_window = real.reset_closes_window
         self.auth_labels = real.auth_labels
         self.label = {"claude": "Claude", "codex": "Codex"}[name]
         self.result = result if result is not None else StokeResult(Window(2.0, 19000, 300), None, 12)
@@ -40,8 +41,8 @@ class FakeProvider:
 class FakeReader(FakeProvider):
     """A provider whose independent read can be controlled without I/O."""
 
-    def __init__(self) -> None:
-        super().__init__("codex")
+    def __init__(self, name: str = "codex") -> None:
+        super().__init__(name)
         self.read_result: LimitsSnapshot | Exception = LimitsSnapshot(
             Window(8, 99999, 301), Window(29, 600000, 10080),
             ResetCredits(1, [ResetCredit("Full reset", 10, 700000)], 0),

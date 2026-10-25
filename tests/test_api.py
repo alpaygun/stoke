@@ -18,6 +18,79 @@ from stoke.store import load
 HEADERS = {"X-Stoke": "1"}
 
 
+@pytest.mark.parametrize("minutes", [0, 30, 300])
+def test_early_reset_api_setting_and_closed_window(
+    minutes: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"codex": FakeReader(), "claude": FakeProvider()}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        state = scheduler.states["codex"]
+        state.five_hour, state.window_closed_at = Window(1, 2800, 300), 1000
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/codex/reset-hold"
+            response = await client.post(url, headers=HEADERS, json={"minutes": minutes})
+            assert response.status_code == 200
+            tool = response.json()
+            assert tool["reset_hold_minutes"] == minutes and tool["window_closed_at"] == 1000
+            assert tool["reset_closes_window"] is True
+            assert not tool["window_open"] and tool["five_hour"]["resets_at"] == 2800
+            assert (await client.get("/api/state")).json()["tools"]["codex"] == tool
+            assert load(scheduler.path, settings, providers)["codex"].reset_hold_minutes == minutes
+            assert (await client.get(url)).status_code == 405
+            assert (await client.post(url, json={"minutes": minutes})).status_code == 403
+            for name, detail in [("unknown", "unknown tool"), ("claude", "refresh not supported")]:
+                response = await client.post(f"/api/tools/{name}/reset-hold", headers=HEADERS, json={"minutes": minutes})
+                assert response.status_code == 404 and response.json()["detail"] == detail
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", [{"minutes": 30}, {}])
+def test_reset_provider_capability_api_rejects_claude_hold(
+    body: object, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader("claude")
+        providers = {"claude": provider}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        state = scheduler.states["claude"]
+        state.five_hour, state.next_stoke_at, state.auto_stoke = Window(40, 19000, 300), 19090, True
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            before = (await client.get("/api/state")).json()["tools"]["claude"]
+            assert before["refreshable"] and before["reset_closes_window"] is False and before["window_open"]
+            response = await client.post("/api/tools/claude/reset-hold", headers=HEADERS, json=body)
+            assert response.status_code == 404 and response.json()["detail"] == "refresh not supported"
+            assert (await client.get("/api/state")).json()["tools"]["claude"] == before
+        assert not scheduler.path.exists()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", [
+    {"minutes": True}, {"minutes": False}, {"minutes": -1}, {"minutes": 301},
+    {"minutes": "30"}, {"minutes": 30.0}, {"minutes": None}, {},
+    {"minutes": 30, "extra": True}, [], True, None,
+])
+def test_early_reset_api_rejects_invalid_body(body: object, settings_factory: Callable[..., Settings]) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"codex": FakeReader()}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/codex/reset-hold"
+            assert (await client.post(url, headers=HEADERS, json=body)).status_code == 422
+            assert (await client.post(url, headers=HEADERS, content="invalid")).status_code == 422
+            assert (await client.post(url, headers=HEADERS)).status_code == 422
+        assert scheduler.states["codex"].reset_hold_minutes == 30
+        assert not scheduler.path.exists()
+    asyncio.run(scenario())
+
+
 def make_scheduler(settings: Settings, provider: FakeProvider | None = None) -> Scheduler:
     """Build one isolated tool for API tests."""
     actual = provider if provider is not None else FakeProvider()
@@ -45,7 +118,9 @@ def test_state_shape_manual_result_health_and_page(
             "window_open": False, "five_hour": None, "weekly": None, "last_stoke": None,
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
             "limits_at": None, "stale_resets": 0,
+            "window_closed_at": None, "reset_hold_minutes": 30,
             "refreshable": False, "refreshing": False, "resets": None,
+            "reset_closes_window": False,
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None,

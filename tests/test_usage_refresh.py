@@ -59,6 +59,220 @@ def scheduler_for(settings: Settings, provider: FakeProvider | None = None) -> S
     return Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
 
 
+@pytest.mark.parametrize("signal", ["weekly", "five_hour"])
+@pytest.mark.parametrize("reader_end", [99999, 10 ** 30])
+def test_reset_provider_capability_keeps_claude_window_and_schedule(
+    signal: str, reader_end: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+
+    async def scenario() -> None:
+        provider = FakeReader("claude")
+        used = 35 if signal == "five_hour" else 40
+        provider.read_result = LimitsSnapshot(
+            Window(used, reader_end, 300), Window(5 if signal == "weekly" else 70, 40000, 10080), None,
+        )
+        scheduler = scheduler_for(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["claude"]
+        state.five_hour, state.weekly, state.limits_at = Window(40, 19000, 300), Window(70, 40000, 10080), 900
+        await scheduler.start()
+        try:
+            await asyncio.sleep(0)
+            await scheduler.refresh_limits("claude")
+            assert state.window_closed_at is None and state.next_stoke_at == 19090
+            assert not scheduler.events["claude"].is_set()
+            assert state.five_hour == Window(used, 19000, 300)
+            assert state.limits_at == 1000 and len(state.weekly_resets) == (1 if signal == "weekly" else 0)
+            await asyncio.sleep(0)
+            assert provider.calls == 0 and state.last_stoke is None
+            assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+        finally:
+            await scheduler.stop()
+        detail = "out-of-range" if reader_end == 10 ** 30 else "1970-01-02T03:46:39+00:00"
+        messages = [record.getMessage() for record in caplog.records if "window kept" in record.getMessage()]
+        assert messages == [f"tool=claude reset detected, window kept read five_hour used={used} resets_at={detail}"]
+        assert all(record.levelname == "INFO" for record in caplog.records if "window kept" in record.getMessage())
+        assert not any("window reset detected" in message for message in caplog.messages)
+    asyncio.run(scenario())
+
+
+def test_reset_provider_capability_defaults_to_closing_when_missing(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeReader("claude")
+    del provider.reset_closes_window
+    scheduler = scheduler_for(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour, state.limits_at = Window(40, 19000, 300), 900
+    assert scheduler.reset_closes_window["claude"] is True
+    asyncio.run(scheduler.refresh_limits("claude"))
+    assert state.window_closed_at == 1000 and state.next_stoke_at == 1000
+    assert scheduler.events["claude"].is_set()
+    scheduler.set_reset_hold("claude", 300)
+    assert state.next_stoke_at == 19090
+
+
+def test_reset_provider_capability_rejects_hold_for_usage_only_reset(settings_factory: Callable[..., Settings]) -> None:
+    scheduler = scheduler_for(settings_factory(), FakeReader("claude"))
+    before = deepcopy(scheduler.states["claude"])
+    with pytest.raises(RefreshUnsupported):
+        scheduler.set_reset_hold("claude", 0)
+    assert scheduler.states["claude"] == before
+    assert not scheduler.path.exists() and not scheduler.events["claude"].is_set()
+
+
+@pytest.mark.parametrize("closes", [False, True])
+def test_reset_provider_capability_is_only_in_live_serialization(closes: bool, settings_factory: Callable[..., Settings]) -> None:
+    scheduler = scheduler_for(settings_factory())
+    state = scheduler.states["codex"]
+    live = serialize_tool(state, 1000, settings=scheduler.settings, reset_closes_window=closes)
+    assert live["reset_closes_window"] is closes
+    assert "reset_closes_window" not in serialize_tool(state)
+    save(scheduler.path, scheduler.states)
+    assert "reset_closes_window" not in json.loads(scheduler.path.read_text(encoding="utf-8"))["codex"]
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["codex"] == state
+
+
+@pytest.mark.parametrize("signal,end,auto,observed,closed,next_at", [
+    ("weekly", 19000, True, 1000, 1000, 1000),
+    ("weekly", 2800, True, 1000, 1000, 2890),
+    ("five_hour", 19000, True, 1000, 1000, 1000),
+    ("five_hour", 1000, True, 1000, None, 1090),
+    ("weekly", 1000, True, 1000, None, 1090),
+    ("weekly", 19000, False, 1000, 1000, None),
+    ("five_hour", 19000, False, 1000, 1000, None),
+    ("both", 19000, True, 899, None, 19090),
+    ("weekly", 19000, True, 900, 900, 1000),
+    ("none", 19000, True, 1000, None, 19090),
+])
+def test_early_reset_refresh_decision(
+    signal: str, end: int, auto: bool, observed: int, closed: int | None, next_at: int | None,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeReader()
+    provider.read_result = LimitsSnapshot(
+        Window(35 if signal in {"five_hour", "both"} else 40, 99999, 301),
+        Window(5 if signal in {"weekly", "both"} else 70, 40000, 10080), None, observed,
+    )
+    scheduler = scheduler_for(settings_factory(), provider)
+    state = scheduler.states["codex"]
+    state.five_hour, state.weekly, state.limits_at = Window(40, end, 300), Window(70, 40000, 10080), 900
+    state.auto_stoke, state.next_stoke_at = auto, end + 90 if auto else None
+    state.consecutive_failures, state.stale_resets = 2, 1
+    asyncio.run(scheduler.refresh_limits("codex"))
+    assert state.window_closed_at == closed and state.next_stoke_at == next_at
+    assert scheduler.events["codex"].is_set() is (closed is not None and auto)
+    assert state.five_hour.resets_at == end and state.five_hour.window_minutes == 300
+    assert (state.consecutive_failures, state.stale_resets) == (2, 1)
+    assert state.limits_at == max(900, observed)
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["codex"] == state
+    if closed is not None:
+        decision = "hold" if next_at is not None and next_at > 1000 else "now"
+        assert f"tool=codex window reset detected decision={decision}" in caplog.messages
+        assert any("read five_hour used=" in message and "1970-01-02T03:46:39+00:00" in message for message in caplog.messages)
+    else:
+        assert not any("window reset detected" in message for message in caplog.messages)
+
+
+def test_early_reset_refresh_wakes_waiting_loop_with_reset_trigger(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        provider = FakeReader()
+        provider.release = asyncio.Event()
+        provider.read_result = LimitsSnapshot(Window(40, 99999, 300), Window(5, 40000, 10080), None)
+        scheduler = scheduler_for(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["codex"]
+        state.five_hour, state.weekly, state.limits_at = Window(40, 19000, 300), Window(70, 40000, 10080), 900
+        await scheduler.start()
+        try:
+            await asyncio.sleep(0)
+            assert provider.calls == 0 and state.next_stoke_at == 19090
+            await scheduler.refresh_limits("codex")
+            assert state.window_closed_at == 1000 and state.next_stoke_at == 1000
+            assert scheduler.events["codex"].is_set()
+            await asyncio.wait_for(provider.started.wait(), 1)
+            provider.release.set()
+            await asyncio.wait_for(scheduler.events["codex"].wait(), 1)
+            assert state.last_stoke.trigger == "reset" and state.last_stoke.ok
+            assert state.window_closed_at is None
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reader_end", [99999, 10 ** 30])
+def test_early_reset_repeated_read_logs_reader_values_without_rescheduling(
+    reader_end: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeReader()
+    provider.read_result = LimitsSnapshot(Window(0, reader_end, 300), Window(0, 40000, 10080), None)
+    scheduler = scheduler_for(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["codex"]
+    state.five_hour, state.weekly, state.limits_at = Window(40, 19000, 300), Window(70, 40000, 10080), 900
+    state.window_closed_at, state.next_stoke_at = 950, 1060
+    asyncio.run(scheduler.refresh_limits("codex"))
+    assert state.window_closed_at == 950 and state.next_stoke_at == 1060
+    assert state.five_hour.resets_at == 19000 and not scheduler.events["codex"].is_set()
+    detail = "out-of-range" if reader_end == 10 ** 30 else "1970-01-02T03:46:39+00:00"
+    assert f"tool=codex read five_hour used=0 resets_at={detail}" in caplog.messages
+    assert not any("window reset detected" in message for message in caplog.messages)
+
+
+def test_early_reset_weekly_signal_without_stored_window_does_not_close(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeReader()
+    provider.read_result = LimitsSnapshot(Window(0, 99999, 300), Window(0, 40000, 10080), None)
+    scheduler = scheduler_for(settings_factory(), provider)
+    state = scheduler.states["codex"]
+    state.weekly, state.limits_at = Window(70, 40000, 10080), 900
+    asyncio.run(scheduler.refresh_limits("codex"))
+    assert len(state.weekly_resets) == 1
+    assert state.five_hour is None and state.window_closed_at is None
+
+
+def test_early_reset_hold_waits_for_old_end_and_uses_auto_trigger(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
+
+    async def scenario() -> None:
+        provider = FakeReader()
+        provider.read_result = LimitsSnapshot(Window(40, 99999, 300), Window(5, 40000, 10080), None)
+        scheduler = scheduler_for(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+        state = scheduler.states["codex"]
+        state.five_hour, state.weekly, state.limits_at = Window(40, 2800, 300), Window(70, 40000, 10080), 900
+        await scheduler.start()
+        try:
+            await scheduler.refresh_limits("codex")
+            await asyncio.sleep(0)
+            assert provider.calls == 0 and state.next_stoke_at == 2890
+            current[0] = 2889
+            scheduler.events["codex"].set()
+            await asyncio.sleep(0)
+            assert provider.calls == 0
+            current[0] = 2890
+            scheduler.events["codex"].set()
+            await asyncio.wait_for(provider.started.wait(), 1)
+            assert state.last_stoke.trigger == "auto" and state.window_closed_at is None
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
+
+
 def test_claude_exact_read_command_and_isolated_environment(settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory(CLAUDE_CODE_OAUTH_TOKEN="synthetic-token", CUSTOM="kept", STOKE_CLAUDE_READER_DIR="reader-dir")
     async def runner(argv: Sequence[str], cwd: Path, timeout_s: float, env: Mapping[str, str] | None = None,
@@ -571,6 +785,7 @@ def test_dry_run_preserves_both_capabilities_and_auth(settings_factory: Callable
     for name, real in (("claude", ClaudeProvider), ("codex", CodexProvider)):
         assert callable(providers[name].read_limits)
         assert providers[name].manual_resets is real.manual_resets
+        assert providers[name].reset_closes_window is real.reset_closes_window
         assert providers[name].auth_labels == real.auth_labels
     async def no_wait(seconds: float) -> None:
         pass

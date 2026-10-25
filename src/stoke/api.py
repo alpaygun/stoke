@@ -44,6 +44,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             refreshable=scheduler.can_refresh(state.name), settings=settings,
             manual_resets_allowed=scheduler.providers[state.name].manual_resets,
             auth_labels=scheduler.providers[state.name].auth_labels,
+            reset_closes_window=scheduler.reset_closes_window[state.name],
         )
 
     @app.get("/api/state")
@@ -141,6 +142,20 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             if not isinstance(body, dict) or set(body) != {"enabled", "seconds"}:
                 raise ValueError("body must contain exactly enabled: bool and seconds: int")
             state = scheduler.set_auto_refresh(name, body["enabled"], body["seconds"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/reset-hold")
+    async def set_reset_hold(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        if not scheduler.can_refresh(name) or not scheduler.reset_closes_window[name]:
+            raise HTTPException(404, "refresh not supported")
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"minutes"}:
+                raise ValueError("body must contain exactly minutes: int")
+            state = scheduler.set_reset_hold(name, body["minutes"])
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         return serialize(state)

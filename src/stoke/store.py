@@ -45,7 +45,7 @@ def _window(value: Any) -> Window | None:
 def _record(value: Any) -> StokeRecord | None:
     if value is None:
         return None
-    if value["trigger"] not in {"auto", "manual", "startup", "planned"}:
+    if value["trigger"] not in {"auto", "manual", "startup", "planned", "reset"}:
         raise ValueError("invalid trigger")
     error = value["error"]
     if error is not None and not isinstance(error, str):
@@ -180,6 +180,8 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 raise ValueError("invalid warning")
             next_at = item["next_stoke_at"]
             limits_at = item.get("limits_at")
+            closed_at = item.get("window_closed_at")
+            hold_minutes = item.get("reset_hold_minutes", 30)
             states[name] = ToolState(
                 name, default.label, _bool(item["auto_stoke"]), False,
                 _window(item["five_hour"]), _window(item["weekly"]), _record(item["last_stoke"]),
@@ -193,6 +195,8 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 last_read=_read_record(item.get("last_read")),
                 manual_resets=_manual_resets(item.get("manual_resets", [])),
                 weekly_resets=_weekly_resets(item.get("weekly_resets", [])),
+                window_closed_at=closed_at if type(closed_at) is int else None,
+                reset_hold_minutes=min(300, max(0, hold_minutes)) if type(hold_minutes) is int else 30,
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):

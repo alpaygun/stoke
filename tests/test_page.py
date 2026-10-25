@@ -188,6 +188,57 @@ def test_settings_controls_and_no_card_menu() -> None:
     assert not re.search(r"more-menu|menu-pop|menu-separator|moreMenu|autoControl", PAGE)
 
 
+def test_early_reset_settings_stepper_and_save_order() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    form, = page.by_id["settings-dialog"]["children"]
+    _, body, _ = form["children"]
+    boxes = body["children"]
+    assert boxes.index(page.by_id["rh-box"]) == boxes.index(page.by_id["ar-box"]) + 1
+    box = page.by_id["rh-box"]
+    assert box["attrs"]["class"] == "settings-box"
+    row, sub = box["children"]
+    assert row["attrs"]["class"] == "settings-row"
+    _, copy = row["children"]
+    title, subtitle = copy["children"]
+    assert title["text"] == "After an early reset"
+    assert subtitle["text"] == "Keep the offset if the old window ends within this many minutes; otherwise stoke at once so the window keeps running. 0 always stokes at once."
+    assert sub["attrs"]["class"] == "settings-row settings-sub"
+    _, _, stepper = sub["children"]
+    assert stepper["attrs"]["class"] == "settings-stepper"
+    assert [node["attrs"].get("id") for node in stepper["children"]] == ["rh-minus", "rh-value", None, "rh-plus"]
+    assert page.by_id["rh-value"]["attrs"] == {
+        "id": "rh-value", "class": "field num", "type": "text", "inputmode": "numeric",
+        "maxlength": "3", "aria-label": "Early reset hold threshold",
+    }
+    for control, kind in [("rh-minus", "minus"), ("rh-plus", "plus")]:
+        assert page.by_id[control]["attrs"]["type"] == "button"
+        assert page.by_id[control]["attrs"]["data-settings-icon"] == kind
+    assert "rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);" in PAGE
+    auto = PAGE.index("if (autoChanged) await post(name, 'auto', { enabled });")
+    refresh = PAGE.index("if (arChanged) await post(name, 'auto-refresh', body);")
+    hold = PAGE.index("if (rhChanged) await post(name, 'reset-hold', { minutes });")
+    assert auto < refresh < hold
+
+
+def test_reset_provider_capability_controls_settings_visibility_and_save() -> None:
+    helper = re.search(r"function openSettings\(name\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    assert "arBox.hidden = !tool.refreshable;" in helper[1]
+    assert "rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);" in helper[1]
+    assert "const rhChanged = tool.refreshable && tool.reset_closes_window && minutes !== tool.reset_hold_minutes;" in PAGE
+
+
+def test_early_reset_settings_rejects_invalid_threshold() -> None:
+    helper = re.search(r"function syncSettings\(\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    code = helper[1]
+    assert "const rhBad = !rhBox.hidden && (!/^\\d{1,3}$/.test(rhValue.value) || Number(rhValue.value) > 300);" in code
+    assert "const bad = arBad || rhBad;" in code
+    assert "settingsSave.disabled = settingsSaving || bad;" in code
+    assert "rhBad ? 'Enter 0 to 300 minutes.'" in code
+
+
 def test_reset_rows_separate_expiry_and_remaining_time() -> None:
     assert "added by you" not in PAGE
     assert "reset-source" not in PAGE

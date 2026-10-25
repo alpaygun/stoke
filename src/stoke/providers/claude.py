@@ -68,6 +68,7 @@ class ClaudeProvider:
     name = "claude"
     label = "Claude"
     manual_resets = True
+    reset_closes_window = False
     auth_labels = {"stoke": {"label": "1-year token"}, "read": {"label": "Browser login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command) -> None:

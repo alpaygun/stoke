@@ -185,12 +185,15 @@ class ToolState:
     last_read: ReadRecord | None = None
     manual_resets: list[ManualReset] = field(default_factory=list)
     weekly_resets: list[WeeklyReset] = field(default_factory=list)
+    window_closed_at: int | None = None
+    reset_hold_minutes: int = 30
 
 
 def serialize_tool(
     state: ToolState, now: int | None = None, refreshable: bool = False,
     *, settings: "Settings | None" = None, manual_resets_allowed: bool = False,
     auth_labels: dict[str, dict[str, str]] | None = None,
+    reset_closes_window: bool = True,
 ) -> dict[str, Any]:
     """Serialize persisted fields, adding live fields only for API responses."""
     data = asdict(state)
@@ -203,8 +206,9 @@ def serialize_tool(
 
         if settings is None:
             raise ValueError("settings required for live serialization")
-        data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now
+        data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
+        data["reset_closes_window"] = reset_closes_window
         data["manual_resets_allowed"] = manual_resets_allowed
         data["manual_resets"] = [asdict(entry) for entry in state.manual_resets if entry.expires_at > now]
         for entry in data["weekly_resets"]:

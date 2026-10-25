@@ -53,8 +53,39 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
         assert state.limits_at is None
         assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None, "manual_resets": [], "weekly_resets": []}
+        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None, "manual_resets": [], "weekly_resets": [], "window_closed_at": None, "reset_hold_minutes": 30}
     assert "using defaults" not in caplog.text
+
+
+@pytest.mark.parametrize("closed,hold,expected_closed,expected_hold", [
+    (1000, 0, 1000, 0), (0, 300, 0, 300), (-1, 30, -1, 30),
+    (None, None, None, 30), (True, True, None, 30), (False, False, None, 30),
+    ("1000", "30", None, 30), (1.5, 30.0, None, 30), ([], {}, None, 30),
+    ({}, [], None, 30), (1000, -10, 1000, 0), (1000, 999, 1000, 300),
+])
+def test_early_reset_store_lenient_fields_preserve_live_state(
+    closed: object, hold: object, expected_closed: int | None, expected_hold: int,
+    settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider(), "codex": FakeProvider("codex")}
+    states = load(settings.data_dir / "state.json", settings, providers)
+    for state in states.values():
+        state.five_hour, state.limits_at, state.auto_stoke = Window(42, 19000, 300), 1000, True
+        state.last_stoke = StokeRecord(1000, "reset", True, None, True, 12)
+    path = settings.data_dir / "state.json"
+    save(path, states)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["codex"]["window_closed_at"], data["codex"]["reset_hold_minutes"] = closed, hold
+    del data["claude"]["window_closed_at"], data["claude"]["reset_hold_minutes"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    caplog.clear()
+    loaded = load(path, settings, providers)
+    states["codex"].window_closed_at, states["codex"].reset_hold_minutes = expected_closed, expected_hold
+    assert loaded == states
+    assert "using defaults" not in caplog.text
+    save(path, loaded)
+    assert load(path, settings, providers) == loaded
 
 
 @pytest.mark.parametrize("limits_at", ["1002", -1, True, 1.5, [], {}])
