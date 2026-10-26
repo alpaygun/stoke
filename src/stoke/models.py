@@ -206,6 +206,7 @@ def serialize_tool(
 
         if settings is None:
             raise ValueError("settings required for live serialization")
+        data["delay_seconds"] = settings.delay_for(state.name)
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
         data["reset_closes_window"] = reset_closes_window

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import clock
@@ -54,6 +54,16 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             name: serialize(state, now)
             for name, state in scheduler.states.items()
         }}
+
+    @app.get("/api/cycles")
+    async def get_cycles(tool: str | None = None, days: int = Query(default=30, ge=1, le=30)) -> dict[str, Any]:
+        if tool is not None:
+            require_tool(tool)
+        try:
+            records = scheduler.cycles.read(clock.now(), tool=tool, days=days)
+        except (OSError, ValueError):
+            raise HTTPException(503, "cycle log unavailable") from None
+        return {"cycles": records}
 
     @app.post("/api/tools/{name}/stoke")
     async def manual_stoke(name: str, request: Request) -> Any:

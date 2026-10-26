@@ -179,7 +179,7 @@ This removes the container and the Codex sign-in volume. Then delete the folder,
 - One Python process (FastAPI + uvicorn) runs one asyncio loop per tool and serves the panel and a small JSON API. State is a single file, `data/state.json`; there is no database.
 - Claude: `claude -p` with the stoke token; the window end comes from the `rate_limit_event` in its `stream-json` output. Usage reads send a `get_usage` control request through the CLI, signed in separately.
 - Codex: `codex exec`; the window end comes from the session file the CLI writes. After each stoke the session is removed with the official `codex delete` command, so no history accumulates. Usage and reset credits come from `codex app-server` (`account/rateLimits/read`); the method that spends a credit is never called.
-- After a successful stoke the next one is scheduled for the window end + `STOKE_DELAY_SECONDS` (90). On restart, a window that is still running is not stoked again.
+- After a successful stoke the next one is scheduled for the window end + `STOKE_DELAY_SECONDS` (90), with optional per-tool overrides in `STOKE_TOOL_DELAYS` (e.g. `codex=10`). On restart, a window that is still running is not stoked again.
 - Error messages are cut short and token-like strings are removed before they are stored or shown.
 
 </details>

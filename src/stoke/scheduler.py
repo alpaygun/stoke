@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from . import clock, store
 from .config import Settings, parse_date, parse_time
+from .cycles import CycleLog, CycleRecord
 from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
@@ -85,7 +86,7 @@ def effective_next(state: ToolState, settings: Settings) -> tuple[int | None, bo
         return base, False
     if base is not None and base < plan.target_at - PLAN_QUIET_SECONDS:
         return base, False
-    return plan_due(plan, known_window(state), settings.delay_seconds), True
+    return plan_due(plan, known_window(state), settings.delay_for(state.name)), True
 
 
 def known_window(state: ToolState) -> Window | None:
@@ -97,7 +98,7 @@ def reset_next(state: ToolState, now: int, settings: Settings) -> int:
     """Preserve a nearby window end; otherwise restart immediately."""
     assert state.five_hour is not None
     if state.five_hour.resets_at - now <= state.reset_hold_minutes * 60:
-        return state.five_hour.resets_at + settings.delay_seconds
+        return state.five_hour.resets_at + settings.delay_for(state.name)
     return now
 
 
@@ -106,9 +107,9 @@ def in_quiet_zone(plan: Plan, now: int) -> bool:
     return plan.target_at - PLAN_QUIET_SECONDS <= now < plan.target_at
 
 
-def next_after_success(result: StokeResult, settings: Settings) -> int:
+def next_after_success(result: StokeResult, delay: int) -> int:
     """Wait for the reported reset plus the configured delay."""
-    return result.five_hour.resets_at + settings.delay_seconds
+    return result.five_hour.resets_at + delay
 
 
 def next_after_failure(now: int, consecutive_failures: int, settings: Settings) -> int:
@@ -123,7 +124,7 @@ def startup_decision(state: ToolState, now: int, settings: Settings) -> Literal[
         if state.window_closed_at is not None:
             next_at = reset_next(state, now, settings)
             return "stoke_now" if next_at <= now else next_at
-        return state.five_hour.resets_at + settings.delay_seconds
+        return state.five_hour.resets_at + settings.delay_for(state.name)
     return "stoke_now"
 
 
@@ -198,6 +199,7 @@ class Scheduler:
         self.states = states
         self.settings = settings
         self.path = path if path is not None else settings.data_dir / "state.json"
+        self.cycles = CycleLog(settings.data_dir / "cycles.jsonl")
         self.locks = {name: asyncio.Lock() for name in providers}
         self.events = {name: asyncio.Event() for name in providers}
         self.refresh_events = {name: asyncio.Event() for name in self.readers}
@@ -232,7 +234,7 @@ class Scheduler:
     def _expire_plan(self, state: ToolState, now: int) -> bool:
         closed = False
         while state.plan is not None and not state.running:
-            if now <= plan_deadline(state.plan, known_window(state), self.settings.delay_seconds):
+            if now <= plan_deadline(state.plan, known_window(state), self.settings.delay_for(state.name)):
                 break
             self._close_occurrence(state, "missed", now)
             closed = True
@@ -242,6 +244,10 @@ class Scheduler:
         """Initialize schedules and launch exactly one loop per tool."""
         if self.tasks:
             return
+        try:
+            self.cycles.prune(clock.now())
+        except (OSError, ValueError) as error:
+            logger.warning("Cycle log pruning failed: %s", type(error).__name__)
         for name, state in self.states.items():
             state.running = False
             state.refreshing = False
@@ -561,6 +567,7 @@ class Scheduler:
             if closed_at is not None and previous is not None:
                 previous = replace(previous, resets_at=closed_at) if attempt_at < previous.resets_at else None
             auto_stopped = state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke
+            completed_at = None
             state.running = True
             self._startup_pending[name] = False
             try:
@@ -607,11 +614,12 @@ class Scheduler:
                         state.last_stoke = StokeRecord(
                             attempt_at, trigger, True, None, opened, result.duration_ms,
                         )
-                        state.next_stoke_at = next_after_success(result, self.settings) if state.auto_stoke else None
+                        state.next_stoke_at = next_after_success(result, self.settings.delay_for(name)) if state.auto_stoke else None
+                completed_at = clock.now()
                 if attempt_plan is not None and state.plan is attempt_plan and state.last_stoke is not None and not state.last_stoke.ok:
                     now = clock.now()
                     retry = next_after_failure(now, state.consecutive_failures, self.settings)
-                    if retry > plan_deadline(attempt_plan, known_window(state), self.settings.delay_seconds):
+                    if retry > plan_deadline(attempt_plan, known_window(state), self.settings.delay_for(state.name)):
                         self._close_occurrence(state, "missed", now)
                     else:
                         attempt_plan.retry_at = retry
@@ -619,6 +627,18 @@ class Scheduler:
                 state.warning = compute_warning(state)
                 self._log_stoke(state)
             finally:
+                if completed_at is not None and state.last_stoke is not None:
+                    record = state.last_stoke
+                    try:
+                        self.cycles.append(CycleRecord(
+                            name, trigger, record.ok, record.error, attempt_at, completed_at,
+                            record.duration_ms, self.settings.delay_for(name),
+                            previous.resets_at if previous is not None else None,
+                            result.five_hour.resets_at if record.ok else None,
+                            record.opened_new_window if record.ok else None,
+                        ), completed_at)
+                    except (OSError, ValueError) as error:
+                        logger.warning("tool=%s cycle logging failed: %s", name, type(error).__name__)
                 state.running = False
                 if task is not None:
                     self._attempts.discard(task)

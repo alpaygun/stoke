@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings
+from stoke.cycles import CYCLE_RETENTION_SECONDS, CycleRecord
 from stoke.models import Window
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import Scheduler
@@ -120,7 +121,7 @@ def test_state_shape_manual_result_health_and_page(
             "limits_at": None, "stale_resets": 0,
             "window_closed_at": None, "reset_hold_minutes": 30,
             "refreshable": False, "refreshing": False, "resets": None,
-            "reset_closes_window": False,
+            "reset_closes_window": False, "delay_seconds": 90,
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None,
@@ -149,6 +150,56 @@ def test_state_exposes_configured_delay_seconds(settings_factory: Callable[..., 
         response = client.get("/api/state")
         assert response.status_code == 200
         assert response.json()["delay_seconds"] == 137
+
+
+def test_state_exposes_live_per_tool_delays(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory(STOKE_DELAY_SECONDS="137", STOKE_TOOL_DELAYS="codex=10")
+    providers = {"claude": FakeProvider(), "codex": FakeProvider("codex")}
+    scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+    with TestClient(create_app(scheduler, settings)) as client:
+        state = client.get("/api/state").json()
+        assert state["delay_seconds"] == 137
+        assert state["tools"]["claude"]["delay_seconds"] == 137
+        assert state["tools"]["codex"]["delay_seconds"] == 10
+        assert "cycles" not in state
+        assert "delay_seconds" not in scheduler.path.read_text(encoding="utf-8")
+
+
+def test_cycles_api_filters_validation_and_order(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = CYCLE_RETENTION_SECONDS + 100
+    monkeypatch.setattr("stoke.clock.now", lambda: now)
+    settings = settings_factory()
+    providers = {"claude": FakeProvider(), "codex": FakeProvider("codex")}
+    scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+    # Deliberately append out of timestamp order to test sorting rather than reversal.
+    for tool, at in [("codex", 100), ("claude", now), ("codex", now - 86400), ("claude", now - 100)]:
+        scheduler.cycles.append(CycleRecord(tool, "auto", True, None, at, at + 1, 1000, 90, None, at + 18000, None), now)
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.get("/api/cycles")  # No X-Stoke header.
+        assert response.status_code == 200 and set(response.json()) == {"cycles"}
+        records = response.json()["cycles"]
+        assert [record["attempt_at"] for record in records] == [now, now - 100, now - 86400, 100]
+        assert client.get("/api/cycles?tool=codex").json()["cycles"] == records[2:]
+        assert client.get("/api/cycles?days=1").json()["cycles"] == records[:3]
+        assert client.get("/api/cycles?days=1&tool=claude").json()["cycles"] == records[:2]
+        for query in ["days=0", "days=31", "days=-1", "days=1.5", "days=abc", "days="]:
+            assert client.get(f"/api/cycles?{query}").status_code == 422
+        assert client.get("/api/cycles?tool=other").status_code == 404
+        assert client.post("/api/cycles", headers=HEADERS).status_code == 405
+    assert not scheduler.states["claude"].last_stoke and not scheduler.states["codex"].last_stoke
+
+
+def test_cycles_api_missing_and_unavailable_file(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    with TestClient(create_app(scheduler, settings)) as client:
+        assert client.get("/api/cycles").json() == {"cycles": []}
+        assert client.get("/api/cycles?tool=codex").status_code == 404
+        scheduler.cycles.path.mkdir()
+        response = client.get("/api/cycles")
+        assert response.status_code == 503 and response.json() == {"detail": "cycle log unavailable"}
 
 
 @pytest.mark.parametrize("path", ["/api/tools/claude/stoke", "/api/tools/claude/auto", "/api/tools/claude/refresh", "/api/tools/claude/plan", "/api/tools/claude/plan/cancel", "/api/tools/claude/resets/update", "/unknown"])

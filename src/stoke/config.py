@@ -31,6 +31,11 @@ class Settings:
     claude_reader_dir: Path
     claude_token_expires: int | None
     process_env: Mapping[str, str] = field(repr=False, compare=False)
+    tool_delays: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+
+    def delay_for(self, tool: str) -> int:
+        """Return a tool's override or the default reset delay."""
+        return self.tool_delays.get(tool, self.delay_seconds)
 
 
 def _integer(value: str, key: str, minimum: int = 1) -> int:
@@ -70,6 +75,23 @@ def _path(value: str, key: str) -> Path:
     if not value.strip() or "\x00" in value:
         raise ValueError(f"{key} must be a nonempty path")
     return Path(value)
+
+
+def _tool_delays(value: str, tools: tuple[str, ...]) -> Mapping[str, int]:
+    key = "STOKE_TOOL_DELAYS"
+    delays: dict[str, int] = {}
+    if value.strip():
+        for part in value.split(","):
+            pair = part.split("=")
+            if len(pair) != 2:
+                raise ValueError(f"{key} must contain tool=seconds pairs")
+            name, seconds = (item.strip() for item in pair)
+            if name not in tools:
+                raise ValueError(f"{key} must contain only enabled tools")
+            if name in delays:
+                raise ValueError(f"{key} must not contain duplicate tools")
+            delays[name] = _integer(seconds, key, 0)
+    return MappingProxyType(delays)
 
 
 def parse_date(value: str, key: str) -> date:
@@ -116,9 +138,10 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         int(datetime.combine(parse_date(expiry, "STOKE_CLAUDE_TOKEN_EXPIRES"), time(), timezone).timestamp())
         if expiry else None
     )
+    tools = _names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS")
     return Settings(
         dry_run=env.get("STOKE_DRY_RUN", "1") not in {"0", "false", "no"},
-        tools=_names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS"),
+        tools=tools,
         auto_default=_boolean(env.get("STOKE_AUTO_DEFAULT", "1"), "STOKE_AUTO_DEFAULT"),
         delay_seconds=_integer(env.get("STOKE_DELAY_SECONDS", "90"), "STOKE_DELAY_SECONDS", 0),
         retry_seconds=retry,
@@ -135,4 +158,5 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         claude_reader_dir=_path(env.get("STOKE_CLAUDE_READER_DIR", "/data/claude-reader"), "STOKE_CLAUDE_READER_DIR"),
         claude_token_expires=expires_at,
         process_env=MappingProxyType(dict(env)),
+        tool_delays=_tool_delays(env.get("STOKE_TOOL_DELAYS", ""), tools),
     )

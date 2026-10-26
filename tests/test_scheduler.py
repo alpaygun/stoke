@@ -226,7 +226,62 @@ def make_scheduler(settings: Settings, provider: FakeProvider) -> Scheduler:
 
 
 def test_next_after_success(settings_factory: Callable[..., Settings]) -> None:
-    assert next_after_success(StokeResult(Window(1, 2000, 300), None, 3), settings_factory()) == 2090
+    assert next_after_success(StokeResult(Window(1, 2000, 300), None, 3), settings_factory().delay_for("claude")) == 2090
+
+
+@pytest.mark.parametrize("name,delay", [("claude", 90), ("codex", 10)])
+def test_per_tool_scheduling_rules(
+    name: str, delay: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_TOOL_DELAYS="codex=10")
+    scheduler = make_scheduler(settings, FakeProvider(name))
+    state = scheduler.states[name]
+    state.five_hour = Window(1, 2000, 300)
+    assert startup_decision(state, 1000, settings) == 2000 + delay
+    assert reset_next(state, 1000, settings) == 2000 + delay
+    state.window_closed_at = 999
+    assert startup_decision(state, 1000, settings) == 2000 + delay
+    state.window_closed_at = None
+    state.plan = Plan("03:20", "once", None, 2000, None)
+    assert plan_due(state.plan, state.five_hour, settings.delay_for(name)) == 2000 + delay
+    assert plan_deadline(state.plan, state.five_hour, settings.delay_for(name)) == 2900 + delay
+    assert effective_next(state, settings) == (2000 + delay, True)
+    assert not scheduler._expire_plan(state, 2900 + delay)
+    assert scheduler._expire_plan(state, 2901 + delay)
+    asyncio.run(scheduler.stoke_now(name, "manual"))
+    assert state.next_stoke_at == 19000 + delay
+
+
+def test_per_tool_startup_and_refresh_paths(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory(STOKE_AUTO_DEFAULT="1", STOKE_TOOL_DELAYS="codex=10")
+        providers = {"claude": FakeProvider(), "codex": FakeReader()}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        for state in scheduler.states.values():
+            state.five_hour = Window(40, 2800, 300)
+        await scheduler.start()
+        try:
+            assert scheduler.states["claude"].next_stoke_at == 2890
+            assert scheduler.states["codex"].next_stoke_at == 2810
+            await scheduler.refresh_limits("codex")
+            assert scheduler.states["codex"].window_closed_at == 1000
+            assert scheduler.states["codex"].next_stoke_at == 2810
+            scheduler.set_reset_hold("codex", 0)
+            assert scheduler.states["codex"].next_stoke_at == 1000
+            scheduler.set_reset_hold("codex", 30)
+            assert scheduler.states["codex"].next_stoke_at == 2810
+            scheduler.set_auto("codex", False)
+            scheduler.set_auto("codex", True)
+            assert scheduler.states["codex"].next_stoke_at == 2810
+            assert all(provider.calls == 0 for provider in providers.values())
+        finally:
+            await scheduler.stop()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("failures,delay", [(1, 60), (2, 300), (3, 900), (4, 1800), (5, 3600), (6, 3600), (1000, 3600)])

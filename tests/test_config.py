@@ -79,3 +79,35 @@ def test_invalid_timezone(key: str) -> None:
 
 def test_timezone_override() -> None:
     assert load_settings({"STOKE_TIMEZONE": "America/New_York"}).timezone.key == "America/New_York"
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_tool_delay_defaults(value: str) -> None:
+    settings = load_settings({"STOKE_TOOL_DELAYS": value, "STOKE_DELAY_SECONDS": "137"})
+    assert dict(settings.tool_delays) == {}
+    assert settings.delay_for("claude") == settings.delay_for("codex") == 137
+
+
+def test_tool_delays_are_whitespace_tolerant_and_immutable() -> None:
+    settings = load_settings({"STOKE_TOOL_DELAYS": " codex = 10 , claude = 0 "})
+    assert dict(settings.tool_delays) == {"codex": 10, "claude": 0}
+    assert settings.delay_for("codex") == 10 and settings.delay_for("claude") == 0
+    with pytest.raises(TypeError):
+        settings.tool_delays["codex"] = 20
+    default = load_settings({})
+    assert default.delay_for("codex") == default.delay_for("claude") == 90
+    assert load_settings({"STOKE_TOOL_DELAYS": "codex=10"}).delay_for("claude") == 90
+
+
+@pytest.mark.parametrize("value", [
+    "codex", "codex=", "codex=1.5", "codex=-1", "codex=ten", "codex=1=2",
+    "=10", "other=10", "codex=1,codex=2", "codex=10,", ",codex=10",
+])
+def test_invalid_tool_delays(value: str) -> None:
+    with pytest.raises(ValueError, match="STOKE_TOOL_DELAYS"):
+        load_settings({"STOKE_TOOL_DELAYS": value})
+
+
+def test_tool_delays_reject_disabled_registered_tool() -> None:
+    with pytest.raises(ValueError, match="STOKE_TOOL_DELAYS"):
+        load_settings({"STOKE_TOOLS": "claude", "STOKE_TOOL_DELAYS": "codex=10"})

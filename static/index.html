@@ -1031,24 +1031,29 @@
     const offsetOptions = document.querySelector('#offset-options');
     let offsetWaiting = 'codex', offsetSaving = false;
     let offsetStatusSignature = null, offsetWhoSignature = null, offsetOptionsSignature = null;
+    function toolDelay(tool, currentState) {
+      return tool.delay_seconds ?? currentState.delay_seconds ?? 90;
+    }
     function offsetGap(currentState) {
       const tools = currentState?.tools;
       if (!tools || Object.keys(tools).length !== 2 || !tools.claude || !tools.codex) return null;
       const a = tools.claude.five_hour?.resets_at, b = tools.codex.five_hour?.resets_at;
       if (a == null || b == null) return null;
-      const delay = currentState.delay_seconds ?? 90, period = WINDOW + delay;
+      const period = WINDOW + toolDelay(a <= b ? tools.claude : tools.codex, currentState);
       const d = Math.abs(a - b) % period, gap = Math.min(d, period - d);
-      return { gap, aligned: Math.abs(gap - GOAL) <= 600, delay, period };
+      return { gap, aligned: Math.abs(gap - GOAL) <= 600 };
     }
-    function offsetTargets(waiting, other, delay, period, current = now()) {
-      const e0 = waiting.five_hour.resets_at, o0 = other.five_hour.resets_at + delay;
+    function offsetTargets(waiting, other, currentState, current = now()) {
+      const delayW = toolDelay(waiting, currentState), delayO = toolDelay(other, currentState);
+      const periodW = WINDOW + delayW, periodO = WINDOW + delayO;
+      const e0 = waiting.five_hour.resets_at, o0 = other.five_hour.resets_at + delayO;
       const options = [];
       for (let k = 0; k < 10 && options.length < 5; k++) {
-        const T = Math.ceil((o0 + k * period + GOAL) / 60) * 60;
+        const T = Math.ceil((o0 + k * periodO + GOAL) / 60) * 60;
         if (T < e0 || T <= current + 60 || T > current + 86400) continue;
         let idle = e0;
         // Only stokes before the plan's quiet zone can open another window.
-        for (let j = 0; e0 + j * period + delay < T - WINDOW; j++) idle = e0 + (j + 1) * period;
+        for (let j = 0; e0 + j * periodW + delayW < T - WINDOW; j++) idle = e0 + (j + 1) * periodW;
         options.push({ T, idle });
       }
       return options;
@@ -1091,7 +1096,7 @@
       const blocked = !waiting.auto_stoke || !other.auto_stoke ? 'Turn auto-stoke on for both tools first.'
         : other.plan ? `${other.label} has a plan; remove it first.` : '';
       const current = now();
-      const options = blocked ? [] : offsetTargets(waiting, other, gap.delay, gap.period, current);
+      const options = blocked ? [] : offsetTargets(waiting, other, state, current);
       const rows = options.map(({ T, idle }) => ({ T, time: when(T, current), idle: `${waiting.label} idle ${clock(idle)}–${clock(T)} (${dur(T - idle)})` }));
       const optionsSignature = JSON.stringify([offsetWaiting, blocked, rows]);
       if (optionsSignature !== offsetOptionsSignature) {
