@@ -9,7 +9,7 @@ services:
     volumes:
       - ./data:/data
       - codex-home:/home/stoke/.codex
-    mem_limit: 512m
+    mem_limit: 1g
     cpus: "2"
     pids_limit: 256
     restart: unless-stopped
