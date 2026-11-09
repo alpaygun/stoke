@@ -111,3 +111,72 @@ def test_invalid_tool_delays(value: str) -> None:
 def test_tool_delays_reject_disabled_registered_tool() -> None:
     with pytest.raises(ValueError, match="STOKE_TOOL_DELAYS"):
         load_settings({"STOKE_TOOLS": "claude", "STOKE_TOOL_DELAYS": "codex=10"})
+
+
+@pytest.mark.parametrize("env", [
+    {}, {"STOKE_ACCESS_TEAM_DOMAIN": "", "STOKE_ACCESS_AUD": ""},
+    {"STOKE_ACCESS_TEAM_DOMAIN": " \t", "STOKE_ACCESS_AUD": "\n "},
+])
+def test_access_disabled_by_default(env: dict[str, str]) -> None:
+    settings = load_settings(env)
+    assert settings.access_team_domain == settings.access_aud == ""
+    assert not settings.access_enabled
+
+
+@pytest.mark.parametrize("domain,expected", [
+    ("example.cloudflareaccess.com", "example.cloudflareaccess.com"),
+    ("https://example.cloudflareaccess.com", "example.cloudflareaccess.com"),
+    ("https://example.cloudflareaccess.com/", "example.cloudflareaccess.com"),
+    ("EXAMPLE.CloudflareAccess.COM", "example.cloudflareaccess.com"),
+    (" HTTPS://EXAMPLE.CloudflareAccess.COM/ ", "example.cloudflareaccess.com"),
+    ("a.cloudflareaccess.com", "a.cloudflareaccess.com"),
+    ("a-1.cloudflareaccess.com", "a-1.cloudflareaccess.com"),
+])
+def test_access_settings_normalize(domain: str, expected: str) -> None:
+    settings = load_settings({"STOKE_ACCESS_TEAM_DOMAIN": domain, "STOKE_ACCESS_AUD": " a1B2c3 \t"})
+    assert settings.access_team_domain == expected
+    assert settings.access_aud == "a1B2c3"
+    assert settings.access_enabled
+
+
+@pytest.mark.parametrize("domain", [
+    "evil.com", "team.cloudflareaccess.com.evil.com", "https://team.cloudflareaccess.com/path",
+    ".cloudflareaccess.com", "-team.cloudflareaccess.com", "team-.cloudflareaccess.com",
+    "two.labels.cloudflareaccess.com", "http://team.cloudflareaccess.com",
+    "https://team.cloudflareaccess.com//", "team.cloudflareaccess.com/",
+    "https://team.cloudflareaccess.com:443", "https://user@team.cloudflareaccess.com",
+    "tëam.cloudflareaccess.com", "K.cloudflareaccess.com", "team_cloud.cloudflareaccess.com",
+])
+def test_access_rejects_invalid_domains_without_echoing_values(domain: str) -> None:
+    with pytest.raises(ValueError) as error:
+        load_settings({"STOKE_ACCESS_TEAM_DOMAIN": domain, "STOKE_ACCESS_AUD": "a1b2c3"})
+    assert str(error.value) == "STOKE_ACCESS_TEAM_DOMAIN must be a <team>.cloudflareaccess.com host"
+    assert "a1b2c3" not in str(error.value)
+
+
+@pytest.mark.parametrize("env", [
+    {"STOKE_ACCESS_TEAM_DOMAIN": "example.cloudflareaccess.com"},
+    {"STOKE_ACCESS_AUD": "a1b2c3"},
+    {"STOKE_ACCESS_TEAM_DOMAIN": "example.cloudflareaccess.com", "STOKE_ACCESS_AUD": " \t"},
+    {"STOKE_ACCESS_TEAM_DOMAIN": " \t", "STOKE_ACCESS_AUD": "a1b2c3"},
+])
+def test_access_settings_must_be_set_together(env: dict[str, str]) -> None:
+    with pytest.raises(ValueError) as error:
+        load_settings(env)
+    assert str(error.value) == "STOKE_ACCESS_TEAM_DOMAIN and STOKE_ACCESS_AUD must be set together"
+    assert "example.cloudflareaccess.com" not in str(error.value) and "a1b2c3" not in str(error.value)
+
+
+@pytest.mark.parametrize("aud", ["a b", "a-b", "a_b", "a!b", "a" * 129, "aéb", "a\nb"])
+def test_access_rejects_invalid_aud_without_echoing_values(aud: str) -> None:
+    with pytest.raises(ValueError) as error:
+        load_settings({"STOKE_ACCESS_TEAM_DOMAIN": "example.cloudflareaccess.com", "STOKE_ACCESS_AUD": aud})
+    assert str(error.value) == "STOKE_ACCESS_AUD must be the application's AUD tag"
+    assert aud not in str(error.value) and "example.cloudflareaccess.com" not in str(error.value)
+
+
+@pytest.mark.parametrize("aud", ["a", "A1" * 64])
+def test_access_aud_length_boundaries(aud: str) -> None:
+    assert load_settings({
+        "STOKE_ACCESS_TEAM_DOMAIN": "example.cloudflareaccess.com", "STOKE_ACCESS_AUD": aud,
+    }).access_aud == aud

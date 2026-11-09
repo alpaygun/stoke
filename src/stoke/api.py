@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import clock
+from .access import AccessVerifier
 from .config import Settings
 from .models import ToolState, serialize_tool
 from .providers.base import ProviderError
@@ -46,6 +47,20 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         if request.method == "POST" and request.headers.get("X-Stoke") != "1":
             return JSONResponse({"detail": "X-Stoke: 1 required"}, status_code=403)
         return await call_next(request)
+
+    if settings.access_enabled:
+        verifier = AccessVerifier(settings)
+
+        # Later middleware wraps earlier middleware: identity precedes X-Stoke.
+        @app.middleware("http")
+        async def require_access(request: Request, call_next: Any) -> Any:
+            if request.url.path != "/healthz":
+                result = await verifier.check(request.headers.get("Cf-Access-Jwt-Assertion"))
+                if result == "denied":
+                    return JSONResponse({"detail": "Cloudflare Access token required"}, status_code=403)
+                if result == "unavailable":
+                    return JSONResponse({"detail": "access keys unavailable"}, status_code=503)
+            return await call_next(request)
 
     def require_tool(name: str) -> None:
         if name not in scheduler.states:

@@ -32,6 +32,13 @@ class Settings:
     claude_token_expires: int | None
     process_env: Mapping[str, str] = field(repr=False, compare=False)
     tool_delays: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    access_team_domain: str = ""
+    access_aud: str = ""
+
+    @property
+    def access_enabled(self) -> bool:
+        """Require Access identity only when both settings are present."""
+        return bool(self.access_team_domain and self.access_aud)
 
     def delay_for(self, tool: str) -> int:
         """Return a tool's override or the default reset delay."""
@@ -111,6 +118,22 @@ def parse_time(value: str, key: str) -> time:
     return time.fromisoformat(value)
 
 
+def _access_settings(domain: str, aud: str) -> tuple[str, str]:
+    domain, aud = domain.strip(), aud.strip()
+    if bool(domain) != bool(aud):
+        raise ValueError("STOKE_ACCESS_TEAM_DOMAIN and STOKE_ACCESS_AUD must be set together")
+    if not domain:
+        return "", ""
+    host = domain.lower()
+    if host.startswith("https://"):
+        host = host[len("https://"):].removesuffix("/")
+    if not domain.isascii() or re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?\.cloudflareaccess\.com", host, re.ASCII) is None:
+        raise ValueError("STOKE_ACCESS_TEAM_DOMAIN must be a <team>.cloudflareaccess.com host")
+    if re.fullmatch(r"[A-Za-z0-9]{1,128}", aud, re.ASCII) is None:
+        raise ValueError("STOKE_ACCESS_AUD must be the application's AUD tag")
+    return host, aud
+
+
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
     """Read and validate all configuration without revealing secret values."""
     retry = tuple(
@@ -139,6 +162,9 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         if expiry else None
     )
     tools = _names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS")
+    access_team_domain, access_aud = _access_settings(
+        env.get("STOKE_ACCESS_TEAM_DOMAIN", ""), env.get("STOKE_ACCESS_AUD", ""),
+    )
     return Settings(
         dry_run=env.get("STOKE_DRY_RUN", "1") not in {"0", "false", "no"},
         tools=tools,
@@ -159,4 +185,6 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         claude_token_expires=expires_at,
         process_env=MappingProxyType(dict(env)),
         tool_delays=_tool_delays(env.get("STOKE_TOOL_DELAYS", ""), tools),
+        access_team_domain=access_team_domain,
+        access_aud=access_aud,
     )

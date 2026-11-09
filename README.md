@@ -116,6 +116,12 @@ The panel has no login of its own, so it is published on `127.0.0.1` only (`STOK
 - a VPN such as Tailscale or WireGuard, or
 - Cloudflare Tunnel with Cloudflare Access (sign-in by e-mail). If `cloudflared` runs in another container, set `STOKE_PUBLISH_HOST` to the Docker bridge gateway (usually `172.17.0.1`) and point the tunnel at `http://172.17.0.1:8787`.
 
+When Cloudflare Access is in front, set `STOKE_ACCESS_TEAM_DOMAIN` and `STOKE_ACCESS_AUD`
+so the server itself checks the Access token on every request except `/healthz`.
+This rejects requests that bypass Cloudflare, for example from another container on the same host.
+Find the AUD tag in the Zero Trust dashboard → Access → Applications → the app → Overview:
+**Application Audience (AUD) Tag**. Leave both variables empty when not using Cloudflare Access.
+
 Every `POST` request needs the `X-Stoke: 1` header, so another website cannot trigger stokes through your browser.
 
 ## Using the panel
