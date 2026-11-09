@@ -1705,6 +1705,8 @@
         failure.code = result?.code;
         failure.status = response.status;
         failure.plan_target_at = result?.plan_target_at;
+        failure.retry_at = result?.retry_at;
+        failure.limit = result?.limit;
         throw failure;
       }
       return response.json();
@@ -1739,7 +1741,10 @@
         const context = action === 'stoke' ? `Couldn't stoke ${label}`
           : action === 'refresh' ? `Couldn't read ${label} usage`
           : action === 'resets/remove' ? "Couldn't remove the reset" : "Couldn't dismiss";
-        toast('fail', `${context}: ${failure.message}`);
+        const message = failure.code === 'rate_limited' && typeof failure.retry_at === 'number'
+          ? `${context}: limit of ${failure.limit} per hour reached. Try again at ${clock(failure.retry_at)}.`
+          : `${context}: ${failure.message}`;
+        toast('fail', message);
       } finally {
         await refresh();
         busy.delete(name);

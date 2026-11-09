@@ -339,6 +339,19 @@ def test_toast_is_a_manual_popover_outside_app() -> None:
     assert toast in body["children"]
 
 
+def test_rate_limit_failure_toast_uses_server_time_and_keeps_fallback() -> None:
+    post = re.search(r"async function post\(name, action, body\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert post
+    assert "failure.retry_at = result?.retry_at;" in post[1]
+    assert "failure.limit = result?.limit;" in post[1]
+    action = re.search(r"async function act\(name, action, body\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert action
+    assert "failure.code === 'rate_limited' && typeof failure.retry_at === 'number'" in action[1]
+    assert "`${context}: limit of ${failure.limit} per hour reached. Try again at ${clock(failure.retry_at)}.`" in action[1]
+    assert ": `${context}: ${failure.message}`" in action[1]
+    assert "toast('fail', message);" in action[1]
+
+
 def test_failure_toast_has_accessible_dismiss_and_no_timer() -> None:
     helper = re.search(r"function toast\(kind, message\) \{(.*?)\n    \}", PAGE, re.DOTALL)
     assert helper

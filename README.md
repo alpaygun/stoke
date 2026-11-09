@@ -123,6 +123,7 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 - **Settings** (sliders icon) and **Info** (info icon) are buttons in each card's header.
 - The **Auto-stoke** switch in the card's **Settings** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
 - **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (1 to 60 whole minutes).
+- Each tool accepts at most 6 **Stoke now** and 30 **Refresh usage** requests per rolling hour; more are refused (HTTP 429) with the time a slot frees up. Automatic stokes, plans and automatic refresh do not count. The counters live in memory and start over on restart.
 - **After an early reset** in **Settings** applies to tools whose resets restart the window (Codex): wait near the old end to preserve the offset (0–300 minutes, default 30; 0 stokes at once when auto-stoke is on). Claude resets only usage and keeps its schedule.
 - **Info** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
 - **Limit resets** on the card opens the list of available resets.

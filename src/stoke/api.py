@@ -1,6 +1,7 @@
 """FastAPI JSON endpoints and the status page."""
 
 from contextlib import asynccontextmanager
+from math import ceil
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
@@ -11,9 +12,19 @@ from . import clock
 from .config import Settings
 from .models import ToolState, serialize_tool
 from .providers.base import ProviderError
+from .ratelimit import MANUAL_STOKES_PER_WINDOW, RATE_WINDOW_SECONDS, REFRESHES_PER_WINDOW, SlidingWindowLimiter
 from .scheduler import AlreadyRunning, ManualResetsUnsupported, PlanConflict, RefreshUnsupported, Scheduler
 
 STATIC_PAGE = Path(__file__).resolve().parents[2] / "static" / "index.html"
+
+
+def rate_limited_response(action: str, limit: int, retry_at: int, now: int) -> JSONResponse:
+    """Describe the next available slot using the shared API error format."""
+    minutes = max(1, ceil((retry_at - now) / 60))
+    return JSONResponse({
+        "detail": f"too many {action}: {limit} per hour; try again in {minutes} min",
+        "code": "rate_limited", "retry_at": retry_at, "limit": limit,
+    }, status_code=429, headers={"Retry-After": str(retry_at - now)})
 
 
 def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
@@ -27,6 +38,8 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             await scheduler.stop()
 
     app = FastAPI(lifespan=lifespan)
+    manual_limiter = SlidingWindowLimiter(MANUAL_STOKES_PER_WINDOW, RATE_WINDOW_SECONDS)
+    refresh_limiter = SlidingWindowLimiter(REFRESHES_PER_WINDOW, RATE_WINDOW_SECONDS)
 
     @app.middleware("http")
     async def require_header(request: Request, call_next: Any) -> Any:
@@ -77,11 +90,17 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             if not isinstance(body, dict) or set(body) - {"break_plan"} or type(body.get("break_plan", False)) is not bool:
                 raise HTTPException(422, "body must contain break_plan: bool")
             break_plan = body.get("break_plan", False)
+        now = clock.now()
+        retry_at = manual_limiter.acquire(name, now)
+        if retry_at is not None:
+            return rate_limited_response("manual stokes", MANUAL_STOKES_PER_WINDOW, retry_at, now)
         try:
             state = await scheduler.stoke_now(name, "manual", break_plan=break_plan)
         except AlreadyRunning:
+            manual_limiter.release(name, now)
             raise HTTPException(409, "stoke already running") from None
         except PlanConflict as conflict:
+            manual_limiter.release(name, now)
             return JSONResponse({
                 "detail": "stoke would break the plan", "code": "plan_conflict",
                 "plan_target_at": conflict.target_at,
@@ -106,13 +125,19 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         return serialize(scheduler.cancel_plan(name))
 
     @app.post("/api/tools/{name}/refresh")
-    async def refresh_limits(name: str) -> dict[str, Any]:
+    async def refresh_limits(name: str) -> Any:
         require_tool(name)
+        now = clock.now()
+        retry_at = refresh_limiter.acquire(name, now)
+        if retry_at is not None:
+            return rate_limited_response("usage refreshes", REFRESHES_PER_WINDOW, retry_at, now)
         try:
             state = await scheduler.refresh_limits(name)
         except RefreshUnsupported:
+            refresh_limiter.release(name, now)
             raise HTTPException(404, "refresh not supported") from None
         except AlreadyRunning:
+            refresh_limiter.release(name, now)
             raise HTTPException(409, "already running") from None
         except ProviderError as error:
             raise HTTPException(502, str(error)) from None

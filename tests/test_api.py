@@ -19,6 +19,266 @@ from stoke.store import load
 HEADERS = {"X-Stoke": "1"}
 
 
+def test_manual_rate_limit_per_tool_and_rolling_expiry(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"claude": FakeProvider(), "codex": FakeProvider("codex")}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/claude/stoke"
+            for index in range(6):
+                now[0] = 1000 + index * 10
+                response = await client.post(url, headers=HEADERS)
+                assert response.status_code == 200 and response.json()["last_stoke"]["ok"]
+            response = await client.post(url, headers=HEADERS)
+            assert response.status_code == 429
+            assert response.json() == {
+                "detail": "too many manual stokes: 6 per hour; try again in 60 min",
+                "code": "rate_limited", "retry_at": 4600, "limit": 6,
+            }
+            assert response.headers["Retry-After"] == "3550"
+            assert providers["claude"].calls == 6
+            assert (await client.post("/api/tools/codex/stoke", headers=HEADERS)).status_code == 200
+            assert providers["codex"].calls == 1
+            for at, minutes, seconds in [(4539, 2, 61), (4599, 1, 1)]:
+                now[0] = at
+                response = await client.post(url, headers=HEADERS)
+                assert response.status_code == 429
+                assert response.json()["detail"].endswith(f"try again in {minutes} min")
+                assert response.headers["Retry-After"] == str(seconds)
+            now[0] = 4600
+            assert (await client.post(url, headers=HEADERS)).status_code == 200
+            assert providers["claude"].calls == 7
+            response = await client.post(url, headers=HEADERS)
+            assert response.status_code == 429 and response.json()["retry_at"] == 4610
+    asyncio.run(scenario())
+
+
+def test_manual_rate_limit_counts_failed_stokes(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeProvider(result=LimitsUnreadable("no limits"))
+        scheduler = make_scheduler(settings, provider)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            for _ in range(6):
+                response = await client.post("/api/tools/claude/stoke", headers=HEADERS)
+                assert response.status_code == 200
+                assert response.json()["last_stoke"]["ok"] is False
+            response = await client.post("/api/tools/claude/stoke", headers=HEADERS)
+            assert response.status_code == 429 and response.json()["code"] == "rate_limited"
+            assert provider.calls == 6
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("rejection", ["plan_conflict", "already_running", "invalid_body"])
+def test_manual_rate_limit_does_not_count_rejected_requests(
+    rejection: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        scheduler = make_scheduler(settings)
+        if rejection == "plan_conflict":
+            scheduler.set_plan("claude", "07:00", "once", None)
+        if rejection == "already_running":
+            await scheduler.locks["claude"].acquire()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/claude/stoke"
+            try:
+                for _ in range(8):
+                    if rejection == "invalid_body":
+                        response = await client.post(url, headers=HEADERS, json={"break_plan": "yes"})
+                        assert response.status_code == 422
+                    else:
+                        response = await client.post(url, headers=HEADERS)
+                        assert response.status_code == 409
+                        expected = {"detail": "stoke already running"} if rejection == "already_running" else {
+                            "detail": "stoke would break the plan", "code": "plan_conflict", "plan_target_at": 18000,
+                        }
+                        assert response.json() == expected
+            finally:
+                if rejection == "already_running":
+                    scheduler.locks["claude"].release()
+            if rejection == "plan_conflict":
+                scheduler.cancel_plan("claude")
+            assert scheduler.providers["claude"].calls == 0
+            for _ in range(6):
+                assert (await client.post(url, headers=HEADERS)).status_code == 200
+            assert (await client.post(url, headers=HEADERS)).status_code == 429
+            assert scheduler.providers["claude"].calls == 6
+    asyncio.run(scenario())
+
+
+def test_refresh_rate_limit_per_tool_expiry_and_internal_refresh(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"claude": FakeReader("claude"), "codex": FakeReader()}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        await scheduler.refresh_limits("codex")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/codex/refresh"
+            for _ in range(30):
+                assert (await client.post(url, headers=HEADERS)).status_code == 200
+            response = await client.post(url, headers=HEADERS)
+            assert response.status_code == 429
+            assert response.json() == {
+                "detail": "too many usage refreshes: 30 per hour; try again in 60 min",
+                "code": "rate_limited", "retry_at": 4600, "limit": 30,
+            }
+            assert response.headers["Retry-After"] == "3600"
+            assert providers["codex"].read_calls == 31
+            assert (await client.post("/api/tools/claude/refresh", headers=HEADERS)).status_code == 200
+            assert (await client.post("/api/tools/codex/stoke", headers=HEADERS)).status_code == 200
+            await scheduler.refresh_limits("codex")
+            assert providers["codex"].read_calls == 32
+            assert (await client.post(url, headers=HEADERS)).status_code == 429
+            now[0] = 4600
+            assert (await client.post(url, headers=HEADERS)).status_code == 200
+            assert providers["codex"].read_calls == 33
+    asyncio.run(scenario())
+
+
+def test_refresh_rate_limit_counts_provider_errors(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader("claude")
+        provider.read_result = ProviderError("read failed")
+        scheduler = make_scheduler(settings, provider)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            for _ in range(30):
+                response = await client.post("/api/tools/claude/refresh", headers=HEADERS)
+                assert response.status_code == 502 and response.json() == {"detail": "read failed"}
+            response = await client.post("/api/tools/claude/refresh", headers=HEADERS)
+            assert response.status_code == 429 and response.json()["code"] == "rate_limited"
+            assert provider.read_calls == 30
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("rejection", ["unsupported", "running", "refreshing"])
+def test_refresh_rate_limit_does_not_count_rejected_requests(
+    rejection: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader("claude")
+        scheduler = make_scheduler(settings, provider)
+        if rejection == "unsupported":
+            scheduler.readers.pop("claude")
+        else:
+            setattr(scheduler.states["claude"], rejection, True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/claude/refresh"
+            for _ in range(35):
+                response = await client.post(url, headers=HEADERS)
+                assert response.status_code == (404 if rejection == "unsupported" else 409)
+                assert response.json() == {"detail": "refresh not supported" if rejection == "unsupported" else "already running"}
+            assert provider.read_calls == 0
+            if rejection == "unsupported":
+                scheduler.readers["claude"] = provider
+            else:
+                setattr(scheduler.states["claude"], rejection, False)
+            for _ in range(30):
+                assert (await client.post(url, headers=HEADERS)).status_code == 200
+            assert (await client.post(url, headers=HEADERS)).status_code == 429
+            assert provider.read_calls == 30
+    asyncio.run(scenario())
+
+
+def test_manual_rate_limit_leaves_automatic_and_planned_stokes_unlimited(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        scheduler = make_scheduler(settings)
+        await scheduler.stoke_now("claude", "auto")
+        await scheduler.stoke_now("claude", "planned")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            for _ in range(6):
+                assert (await client.post("/api/tools/claude/stoke", headers=HEADERS)).status_code == 200
+            assert (await client.post("/api/tools/claude/stoke", headers=HEADERS)).status_code == 429
+            state = await scheduler.stoke_now("claude", "auto")
+            assert state.last_stoke is not None and state.last_stoke.trigger == "auto" and state.last_stoke.ok
+            state = await scheduler.stoke_now("claude", "planned")
+            assert state.last_stoke is not None and state.last_stoke.trigger == "planned" and state.last_stoke.ok
+            assert scheduler.providers["claude"].calls == 10
+            assert (await client.post("/api/tools/claude/stoke", headers=HEADERS)).status_code == 429
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("action", "limit"), [("stoke", 6), ("refresh", 30)])
+def test_rate_limit_instances_are_per_app(
+    action: str, limit: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        scheduler = make_scheduler(settings, FakeReader("claude"))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = f"/api/tools/claude/{action}"
+            for _ in range(limit):
+                assert (await client.post(url, headers=HEADERS)).status_code == 200
+            assert (await client.post(url, headers=HEADERS)).status_code == 429
+            other_action = "refresh" if action == "stoke" else "stoke"
+            assert (await client.post(f"/api/tools/claude/{other_action}", headers=HEADERS)).status_code == 200
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            assert (await client.post(url, headers=HEADERS)).status_code == 200
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("action", "limit"), [("stoke", 6), ("refresh", 30)])
+def test_rate_limit_reserves_slot_before_provider_await(
+    action: str, limit: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeReader("claude")
+        scheduler = make_scheduler(settings, provider)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = f"/api/tools/claude/{action}"
+            for _ in range(limit - 1):
+                assert (await client.post(url, headers=HEADERS)).status_code == 200
+            provider.started.clear()
+            provider.read_started.clear()
+            provider.release = provider.read_release = asyncio.Event()
+            pending = asyncio.create_task(client.post(url, headers=HEADERS))
+            try:
+                await (provider.started if action == "stoke" else provider.read_started).wait()
+                response = await client.post(url, headers=HEADERS)
+                assert response.status_code == 429 and response.json()["code"] == "rate_limited"
+                assert (provider.calls if action == "stoke" else provider.read_calls) == limit
+            finally:
+                provider.release.set()
+                result = await pending
+            assert result.status_code == 200
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("minutes", [0, 30, 300])
 def test_early_reset_api_setting_and_closed_window(
     minutes: int, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
