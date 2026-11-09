@@ -10,6 +10,8 @@ services:
       - ./data:/data
       - codex-home:/home/stoke/.codex
     mem_limit: 512m
+    cpus: "2"
+    pids_limit: 256
     restart: unless-stopped
     logging:
       driver: json-file
