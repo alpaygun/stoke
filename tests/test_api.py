@@ -19,6 +19,16 @@ from stoke.store import load
 HEADERS = {"X-Stoke": "1"}
 
 
+@pytest.mark.parametrize("name", ["claude", "codex"])
+@pytest.mark.parametrize("action", ["resets", "resets/update", "resets/remove"])
+def test_removed_reset_routes(name: str, action: str, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    with TestClient(create_app(make_scheduler(settings), settings)) as client:
+        for method in ("get", "post"):
+            result = getattr(client, method)(f"/api/tools/{name}/{action}", headers=HEADERS)
+            assert result.status_code in {404, 405}
+
+
 def test_manual_rate_limit_per_tool_and_rolling_expiry(
     settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -352,6 +362,52 @@ def test_early_reset_api_rejects_invalid_body(body: object, settings_factory: Ca
     asyncio.run(scenario())
 
 
+def test_show_scoped_api_defaults_persistence_and_post_protection(settings_factory: Callable[..., Settings]) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        providers = {"claude": FakeReader("claude"), "codex": FakeProvider("codex")}
+        scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            tools = (await client.get("/api/state")).json()["tools"]
+            assert all(tool["show_scoped"] is True for tool in tools.values())
+            url = "/api/tools/claude/show-scoped"
+            assert (await client.post(url, json={"enabled": False})).status_code == 403
+            assert not scheduler.path.exists()
+            assert (await client.get(url)).status_code == 405
+            # Visibility changes have no request quota and never read usage.
+            for enabled in [False, True] * 16 + [False]:
+                response = await client.post(url, headers=HEADERS, json={"enabled": enabled})
+                assert response.status_code == 200 and response.json()["show_scoped"] is enabled
+            tools = (await client.get("/api/state")).json()["tools"]
+            assert tools["claude"] == response.json()
+            assert tools["codex"]["show_scoped"] is True
+            restored = load(scheduler.path, settings, providers)
+            assert restored["claude"].show_scoped is False and restored["codex"].show_scoped is True
+            assert providers["claude"].read_calls == 0 and providers["claude"].calls == 0
+            for name, detail in [("unknown", "unknown tool"), ("codex", "refresh not supported")]:
+                response = await client.post(f"/api/tools/{name}/show-scoped", headers=HEADERS, json={"enabled": False})
+                assert response.status_code == 404 and response.json() == {"detail": detail}
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", [
+    {"enabled": 1}, {"enabled": 0}, {"enabled": 1.0}, {"enabled": "false"}, {"enabled": None},
+    {"enabled": []}, {"enabled": {}}, {"enabled": False, "extra": True}, {}, [], True, None,
+])
+def test_show_scoped_api_rejects_invalid_body(body: object, settings_factory: Callable[..., Settings]) -> None:
+    async def scenario() -> None:
+        settings = settings_factory()
+        scheduler = make_scheduler(settings, FakeReader("claude"))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(scheduler, settings)), base_url="http://test") as client:
+            url = "/api/tools/claude/show-scoped"
+            assert (await client.post(url, headers=HEADERS, json=body)).status_code == 422
+            assert (await client.post(url, headers=HEADERS, content="invalid")).status_code == 422
+            assert (await client.post(url, headers=HEADERS)).status_code == 422
+        assert scheduler.states["claude"].show_scoped is True
+        assert not scheduler.path.exists()
+    asyncio.run(scenario())
+
+
 def make_scheduler(settings: Settings, provider: FakeProvider | None = None) -> Scheduler:
     """Build one isolated tool for API tests."""
     actual = provider if provider is not None else FakeProvider()
@@ -385,8 +441,8 @@ def test_state_shape_manual_result_health_and_page(
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None,
-            "manual_resets": [], "manual_resets_allowed": True, "weekly_resets": [],
-            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Browser login", "expires_at": None}},
+            "scoped_limits": [], "show_scoped": True, "plan_name": None, "weekly_resets": [],
+            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Account login", "expires_at": None}},
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}
@@ -477,95 +533,6 @@ def test_unknown_tool_is_404(action: str, settings_factory: Callable[..., Settin
         assert client.post(f"/api/tools/unknown/{action}", headers=HEADERS, json={"enabled": True}).status_code == 404
 
 
-def test_manual_reset_time_and_update_api(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
-    settings = settings_factory(STOKE_TIMEZONE="Europe/Istanbul")
-    scheduler = make_scheduler(settings)
-    with TestClient(create_app(scheduler, settings)) as client:
-        body = {"title": "Full reset", "expires_on": "2026-10-20"}
-        response = client.post("/api/tools/claude/resets", headers=HEADERS, json=body)
-        assert response.status_code == 200
-        original, = response.json()["manual_resets"]
-        assert original["expires_at"] == 1792529940  # 2026-10-20 23:59 at UTC+03:00.
-        response = client.post("/api/tools/claude/resets", headers=HEADERS, json={**body, "expires_time": "09:30"})
-        assert response.status_code == 200
-        entries = response.json()["manual_resets"]
-        assert entries[0]["expires_at"] == 1792477800  # 2026-10-20 09:30 at UTC+03:00.
-        monkeypatch.setattr("stoke.clock.now", lambda: 2000)
-        response = client.post("/api/tools/claude/resets/update", headers=HEADERS, json={
-            **body, "id": original["id"], "title": "5-hour reset", "expires_time": "08:15",
-        })
-        assert response.status_code == 200
-        updated, other = response.json()["manual_resets"]
-        assert updated == {**original, "title": "5-hour reset", "expires_at": 1792473300}
-        assert other == entries[0]
-        assert load(scheduler.path, settings, scheduler.providers) == scheduler.states
-
-
-@pytest.mark.parametrize("action", ["resets", "resets/update"])
-@pytest.mark.parametrize("time", ["24:00", "9:30", "09:60", "09:30:00", None, 930, True])
-def test_manual_reset_api_invalid_time(action: str, time: object, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
-    settings = settings_factory()
-    scheduler = make_scheduler(settings)
-    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20")
-    before = list(state.manual_resets)
-    body = {"title": "Full reset", "expires_on": "2026-10-20", "expires_time": time}
-    if action == "resets/update":
-        body["id"] = state.manual_resets[0].id
-    with TestClient(create_app(scheduler, settings)) as client:
-        response = client.post(f"/api/tools/claude/{action}", headers=HEADERS, json=body)
-        assert response.status_code == 422
-        if isinstance(time, str):
-            assert response.json()["detail"] == "expires_time must be HH:MM"
-        else:
-            assert response.json()["detail"].startswith("body must contain exactly ")
-    assert state.manual_resets == before
-
-
-@pytest.mark.parametrize("change", [
-    {"id": "unknown"}, {"expires_on": "1970-01-01"}, {"expires_on": "bad"},
-    {"title": "bad"}, {"id": 1}, {"title": False}, {"expires_on": 20261020}, {"extra": "value"},
-])
-def test_manual_reset_update_invalid(change: dict[str, object], settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: 1700000000)
-    settings = settings_factory()
-    scheduler = make_scheduler(settings)
-    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20")
-    before = list(state.manual_resets)
-    body = {"id": before[0].id, "title": "Full reset", "expires_on": "2026-10-20", "expires_time": "12:00", **change}
-    with TestClient(create_app(scheduler, settings)) as client:
-        response = client.post("/api/tools/claude/resets/update", headers=HEADERS, json=body)
-        assert response.status_code == 422
-        if change == {"id": "unknown"}:
-            assert response.json()["detail"] == "manual reset id not found"
-        if change == {"expires_on": "1970-01-01"}:
-            assert response.json()["detail"] == "expiry must be in the future"
-    assert state.manual_resets == before
-
-
-@pytest.mark.parametrize("missing", ["id", "title", "expires_on", "expires_time"])
-def test_manual_reset_update_requires_all_fields(missing: str, settings_factory: Callable[..., Settings]) -> None:
-    settings = settings_factory()
-    body = {"id": "unknown", "title": "Full reset", "expires_on": "2026-10-20", "expires_time": "12:00"}
-    del body[missing]
-    with TestClient(create_app(make_scheduler(settings), settings)) as client:
-        response = client.post("/api/tools/claude/resets/update", headers=HEADERS, json=body)
-        assert response.status_code == 422
-        assert response.json()["detail"].startswith("body must contain exactly ")
-
-
-def test_manual_reset_update_bad_body_and_unsupported(settings_factory: Callable[..., Settings]) -> None:
-    settings = settings_factory()
-    providers = {name: FakeProvider(name) for name in ("claude", "codex")}
-    scheduler = Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
-    with TestClient(create_app(scheduler, settings)) as client:
-        for value in ([], True, None):
-            assert client.post("/api/tools/claude/resets/update", headers=HEADERS, json=value).status_code == 422
-        assert client.post("/api/tools/claude/resets/update", headers=HEADERS, content="invalid").status_code == 422
-        assert client.post("/api/tools/codex/resets/update", headers=HEADERS, json={}).status_code == 404
-
-
 @pytest.mark.parametrize("body", [{}, {"enabled": 1}, {"enabled": "true"}, {"enabled": None}, [], True])
 def test_auto_body_requires_actual_bool(body: object, settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory()
@@ -645,7 +612,7 @@ def test_refresh_api_state_success_and_all_response_capabilities(
             result = response.json()
             assert result["refreshable"] and not result["refreshing"] and result["five_hour"] is None
             assert result["limits_at"] == 1000
-            assert result["resets"] == {"available": 1, "credits": [{"title": "Full reset", "granted_at": 10, "expires_at": 700000}], "read_at": 1000}
+            assert result["resets"] == {"available": 1, "credits": [{"title": "Full reset", "granted_at": 10, "expires_at": 700000, "usable": None}], "read_at": 1000, "cooldown_until": None}
             assert (await client.get("/api/state")).json()["tools"]["codex"] == result
             for action, body in [("stoke", None), ("auto", {"enabled": False})]:
                 response = await client.post(f"/api/tools/codex/{action}", headers=HEADERS, json=body)

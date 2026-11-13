@@ -17,7 +17,7 @@ from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings, load_settings
 from stoke.httpget import BODY_LIMIT, HttpGetError, HttpResponse, _NoRedirect, http_get
-from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, Window
+from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, ScopedLimit, Window
 from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut
 from stoke.providers.claude import ClaudeProvider
@@ -201,6 +201,76 @@ def test_claude_absent_or_empty_credits(settings: Settings, block: Any, expected
     claude_auth(settings)
     snapshot = asyncio.run(ClaudeProvider(settings, http=FakeHttp(response(usage(cedar_ember=block)))).read_limits())
     assert snapshot.resets == expected
+
+
+@pytest.mark.parametrize("usable,expected", [(True, True), (False, False), (None, None), (1, None), ("true", None), ([], None)])
+@pytest.mark.parametrize("cooldown", [None, "bad", 42, iso(NOW + 3600)])
+def test_claude_credit_usability_and_cooldown(settings: Settings, usable: Any, expected: Any, cooldown: Any) -> None:
+    claude_auth(settings)
+    block = {"eligible": True, "grants": [grant(["seven_day"], 10000, usable_now=usable)], "cooldown_until": cooldown}
+    snapshot = asyncio.run(ClaudeProvider(settings, http=FakeHttp(response(usage(cedar_ember=block)))).read_limits())
+    assert snapshot.resets == ResetCredits(1, [ResetCredit("Full reset", NOW - 100, NOW + 10000, expected)], 0,
+                                          NOW + 3600 if cooldown == iso(NOW + 3600) else None)
+
+
+def test_claude_optional_details_clamp_cap_and_identity_privacy(settings: Settings) -> None:
+    claude_auth(settings)
+    def scoped(label: Any, percent: Any = 23, **overrides: Any) -> dict[str, Any]:
+        return {"kind": "weekly_scoped", "scope": {"model": {"display_name": label, "id": "private-model-sentinel"}},
+                "percent": percent, "resets_at": iso(NOW + 604800), **overrides}
+    invalid = [None, {}, scoped(None), scoped("  "), scoped("bad", True), scoped("bad", "10"),
+               scoped("bad", float("nan")), scoped("bad", float("inf")), scoped("bad", kind="weekly"),
+               scoped("bad", scope={"model": {"id": "private-model-sentinel"}})]
+    payload = usage(limits=invalid + [scoped(" Fable ", -1), scoped("x" * 50, 101, resets_at="bad")]
+                    + [scoped(str(i)) for i in range(10)],
+                    cedar_ember={"event_props": {"tier": "claude_max_20x", "id": "private-tier-sentinel"}})
+    scheduler = scheduler_for(settings, ClaudeProvider(settings, http=FakeHttp(response(payload))))
+    state = asyncio.run(scheduler.refresh_limits("claude"))
+    assert state.scoped_limits == [ScopedLimit("Fable", 0, NOW + 604800), ScopedLimit("x" * 40, 100, None)] + [
+        ScopedLimit(str(i), 23, NOW + 604800) for i in range(3)]
+    assert state.limits_at == NOW - 30
+    assert state.plan_name == "Max 20x"
+    stored = scheduler.path.read_text()
+    assert all(value not in stored for value in ("private-model-sentinel", "private-tier-sentinel"))
+    assert "usage_breakdown" not in json.loads(stored)["claude"]
+
+
+@pytest.mark.parametrize("value,expected", [(None, None), ({}, None), ("bad", None), ([], [])])
+def test_claude_optional_detail_containers(settings: Settings, value: Any, expected: Any) -> None:
+    claude_auth(settings)
+    snapshot = asyncio.run(ClaudeProvider(settings, http=FakeHttp(response(usage(
+        limits=value, cedar_ember={"event_props": []},
+    )))).read_limits())
+    assert snapshot.scoped == expected and snapshot.plan_name is None
+
+
+@pytest.mark.parametrize("tier,expected", [
+    ("claude_pro", "Pro"), ("claude_max_20x", "Max 20x"), ("pro", "Pro"),
+    ("claude_a__b", "A  B"), ("claude_", ""),
+    (None, None), ([], None), (True, None), ("", None), ("a" * 41, None),
+    ("Claude_pro", None), ("claude-pro", None), ("claude_pro\n", None), ("private tier", None),
+])
+def test_claude_plan_name_normalisation(settings: Settings, tier: Any, expected: Any) -> None:
+    claude_auth(settings)
+    snapshot = asyncio.run(ClaudeProvider(settings, http=FakeHttp(response(usage(cedar_ember={
+        "event_props": {"tier": tier},
+    })))).read_limits())
+    assert snapshot.plan_name == expected
+
+
+@pytest.mark.parametrize("tier,expected", [("plus", "Plus"), ("pro_team", "Pro Team"), (None, None), ("Plus", None), ([], None)])
+def test_codex_direct_plan_type(settings: Settings, tier: Any, expected: Any) -> None:
+    codex_auth(settings)
+    payload = {**codex_usage(), "plan_type": tier}
+    snapshot = asyncio.run(CodexProvider(settings, http=FakeHttp(response(payload), response({"available_count": 0}))).read_limits())
+    assert snapshot.plan_name == expected and snapshot.scoped is None
+    assert snapshot.resets.cooldown_until is None
+
+
+def test_cli_paths_never_supply_direct_details(settings: Settings) -> None:
+    for provider in (ClaudeProvider(settings, runner=FakeCli()), CodexProvider(settings, rpc=FakeRpc())):
+        snapshot = asyncio.run(provider.read_limits("cli"))
+        assert snapshot.scoped is None and snapshot.plan_name is None
 
 
 def test_claude_ineligible_warning_once_per_process_and_previous_list_kept(
@@ -562,9 +632,15 @@ def test_dry_run_modes_and_stable_login_expiry(settings: Settings, monkeypatch: 
     assert providers["claude"].read_login_expires_at() == NOW + 25 * 86400
     assert providers["codex"].read_login_expires_at() is None
     direct = asyncio.run(providers["claude"].read_limits())
-    assert direct.resets == ResetCredits(2, [ResetCredit("Fable reset", None, NOW + 60 + 4 * 86400), ResetCredit("Full reset", None, NOW + 60 + 27 * 86400)], 0)
+    assert direct.resets == ResetCredits(2, [ResetCredit("Fable reset", None, NOW + 60 + 4 * 86400, True), ResetCredit("Full reset", None, NOW + 60 + 27 * 86400, True)], 0)
+    assert direct.scoped == [ScopedLimit("Fable", 23.0, NOW + 60 + 7 * 86400)]
+    assert direct.plan_name == "Pro"
     assert asyncio.run(providers["claude"].read_limits("cli")).resets is None
     assert asyncio.run(providers["codex"].read_limits()).resets == asyncio.run(providers["codex"].read_limits("cli")).resets
+    assert asyncio.run(providers["codex"].read_limits()).plan_name == "Plus"
+    for provider in providers.values():
+        snapshot = asyncio.run(provider.read_limits("cli"))
+        assert snapshot.scoped is None and snapshot.plan_name is None
 
 
 @pytest.mark.parametrize("status,size", [(200, 10), (200, BODY_LIMIT), (302, 10), (401, 10), (429, 10), (500, 10)])

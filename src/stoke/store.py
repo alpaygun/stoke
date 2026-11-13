@@ -7,10 +7,10 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, READ_MODES, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
+from .models import AutoRefresh, READ_MODES, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ def _reset_credit(entry: Any) -> ResetCredit:
     return ResetCredit(
         sanitize_reset_title(entry["title"]), None if granted is None else _int(granted),
         _int(entry.get("expires_at")),
+        entry.get("usable") if type(entry.get("usable")) is bool else None,
     )
 
 
@@ -77,7 +78,9 @@ def _resets(value: Any) -> ResetCredits | None:
         raise ValueError("invalid reset credits")
     credits = [_reset_credit(entry) for entry in value["credits"]]
     credits.sort(key=lambda credit: credit.expires_at)
-    return ResetCredits(_int(value.get("available")), credits, _int(value.get("read_at")))
+    cooldown = value.get("cooldown_until")
+    return ResetCredits(_int(value.get("available")), credits, _int(value.get("read_at")),
+                        cooldown if type(cooldown) is int else None)
 
 
 def _plan(value: Any) -> Plan | None:
@@ -124,17 +127,30 @@ def _read_record(value: Any) -> ReadRecord | None:
                       None if error is None else short_error(error), _bool(value.get("signed_out")))
 
 
-def _manual_resets(value: Any) -> list[ManualReset]:
-    if not isinstance(value, list) or len(value) > 10:
-        raise ValueError("invalid manual resets")
+def _usage_rows(value: Any, percent_key: str) -> Iterator[tuple[dict[str, Any], str, float]]:
+    """Skip malformed optional rows without discarding the tool's state."""
+    for entry in value if isinstance(value, list) else []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("label"), str) or not entry["label"].strip():
+            continue
+        try:
+            percent = _percent(entry.get(percent_key))
+        except (ValueError, TypeError, OverflowError):
+            continue
+        yield entry, entry["label"].strip()[:40], percent
+
+
+def _scoped_limits(value: Any) -> list[ScopedLimit]:
     entries = []
-    for entry in value:
-        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str)
-                or re.fullmatch(r"[0-9a-f]{12}", entry["id"]) is None
-                or not isinstance(entry.get("title"), str) or entry["title"] not in MANUAL_RESET_TITLES):
-            raise ValueError("invalid manual reset")
-        entries.append(ManualReset(entry["id"], entry["title"], _int(entry.get("expires_at")), _int(entry.get("added_at"))))
-    return sorted(entries, key=lambda entry: entry.expires_at)
+    for entry, label, percent in _usage_rows(value, "used_percent"):
+        resets = entry.get("resets_at")
+        try:
+            resets = None if resets is None else _int(resets)
+        except ValueError:
+            continue
+        entries.append(ScopedLimit(label, percent, resets))
+        if len(entries) >= 5:
+            break
+    return entries
 
 
 def _weekly_resets(value: Any) -> list[WeeklyReset]:
@@ -183,6 +199,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
             closed_at = item.get("window_closed_at")
             hold_minutes = item.get("reset_hold_minutes", 30)
             read_mode = item.get("read_mode")
+            show_scoped = item.get("show_scoped")
             states[name] = ToolState(
                 name, default.label, _bool(item["auto_stoke"]), False,
                 _window(item["five_hour"]), _window(item["weekly"]), _record(item["last_stoke"]),
@@ -194,11 +211,13 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 plan_outcome=_plan_outcome(item.get("plan_outcome")),
                 auto_refresh=_auto_refresh(item.get("auto_refresh", {})),
                 last_read=_read_record(item.get("last_read")),
-                manual_resets=_manual_resets(item.get("manual_resets", [])),
                 weekly_resets=_weekly_resets(item.get("weekly_resets", [])),
                 window_closed_at=closed_at if type(closed_at) is int else None,
                 read_mode=read_mode if isinstance(read_mode, str) and read_mode in READ_MODES else "direct",
                 reset_hold_minutes=min(300, max(0, hold_minutes)) if type(hold_minutes) is int else 30,
+                scoped_limits=_scoped_limits(item.get("scoped_limits")),
+                show_scoped=show_scoped if isinstance(show_scoped, bool) else True,
+                plan_name=item.get("plan_name") if isinstance(item.get("plan_name"), str) else None,
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):

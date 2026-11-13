@@ -18,7 +18,6 @@ class FakeProvider:
     def __init__(self, name: str = "claude", result: StokeResult | Exception | None = None) -> None:
         self.name = name
         real = ClaudeProvider if name == "claude" else CodexProvider
-        self.manual_resets = real.manual_resets
         self.reset_closes_window = real.reset_closes_window
         self.auth_labels = real.auth_labels
         self.label = {"claude": "Claude", "codex": "Codex"}[name]

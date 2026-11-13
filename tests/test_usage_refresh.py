@@ -1,4 +1,4 @@
-"""Claude usage reads, opt-in refresh, manual credits and live sign-in data."""
+"""Claude usage reads, opt-in refresh, vendor credits and live sign-in data."""
 
 import asyncio
 import json
@@ -16,13 +16,13 @@ import pytest
 from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings, load_settings
-from stoke.models import AutoRefresh, LimitsSnapshot, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, Window, serialize_tool, validate_plan
+from stoke.models import AutoRefresh, LimitsSnapshot, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, Window, serialize_tool, validate_plan
 from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut
 from stoke.providers.claude import ClaudeProvider
 from stoke.providers.codex import CodexProvider
 from stoke.runner import CommandResult
-from stoke.scheduler import AlreadyRunning, ManualResetsUnsupported, RefreshUnsupported, Scheduler
+from stoke.scheduler import AlreadyRunning, RefreshUnsupported, Scheduler
 from stoke.store import load, save
 
 HEADERS = {"X-Stoke": "1"}
@@ -401,17 +401,16 @@ def test_new_state_roundtrip_and_v051_compatibility(name: str, settings_factory:
     state.resets = ResetCredits(1, [ResetCredit("Full reset", 1000, 20000)], 1200)
     state.auto_refresh = AutoRefresh(True, 600)
     state.last_read = ReadRecord(1000, False, "usage reader signed out", True)
-    state.manual_resets = [ManualReset("abcdef012345", "Full reset", 5000, 1000)]
     save(scheduler.path, scheduler.states)
     assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
     data = json.loads(scheduler.path.read_text(encoding="utf-8"))
     for item in data.values():
-        for key in ("auto_refresh", "last_read", "manual_resets"):
+        for key in ("auto_refresh", "last_read"):
             del item[key]
     scheduler.path.write_text(json.dumps(data), encoding="utf-8")
     caplog.clear()
     restored = load(scheduler.path, scheduler.settings, scheduler.providers)[name]
-    assert restored == replace(state, auto_refresh=AutoRefresh(), last_read=None, manual_resets=[])
+    assert restored == replace(state, auto_refresh=AutoRefresh(), last_read=None)
     assert "using defaults" not in caplog.text
 
 
@@ -449,11 +448,6 @@ def test_legacy_auto_refresh_normalizes_without_losing_state(
     ("auto_refresh", {"seconds": 90.0}), ("auto_refresh", {"seconds": "90"}),
     ("auto_refresh", {"seconds": 59}), ("auto_refresh", {"seconds": 86401}),
     ("last_read", []), ("last_read", {"at": 1, "ok": True, "error": [], "signed_out": False}),
-    ("manual_resets", None), ("manual_resets", [{}]),
-    ("manual_resets", [{"id": "abcdef012345", "title": "bad", "expires_at": 2, "added_at": 1}]),
-    ("manual_resets", [{"id": "ABCDEF012345", "title": "Full reset", "expires_at": 2, "added_at": 1}]),
-    ("manual_resets", [{"id": "abcdef012345", "title": "Full reset", "expires_at": True, "added_at": 1}]),
-    ("manual_resets", [{"id": "abcdef012345", "title": "Full reset", "expires_at": 2, "added_at": -1}]),
 ])
 def test_invalid_new_state_is_corrupt(key: str, value: Any, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture) -> None:
     scheduler = scheduler_for(settings_factory())
@@ -642,121 +636,10 @@ def test_refresh_events_are_per_tool_and_busy_start_retries(settings_factory: Ca
     asyncio.run(scenario())
 
 
-def test_manual_reset_expiry_equal_to_now_is_rejected(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    current = int(datetime(2026, 10, 17, 23, 59, tzinfo=ZoneInfo("Europe/Istanbul")).timestamp())
-    monkeypatch.setattr("stoke.clock.now", lambda: current)
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    with pytest.raises(ValueError, match="expiry must be in the future"):
-        scheduler.add_manual_reset("claude", "Full reset", "2026-10-17")
-
-
-def test_manual_reset_add_sort_expiry_limit_remove_prune(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    current = [EPOCH]
-    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20")
-    scheduler.add_manual_reset("claude", "5-hour reset", "2026-10-17")
-    early = state.manual_resets[0]
-    assert early.title == "5-hour reset" and re.fullmatch(r"[0-9a-f]{12}", early.id)
-    assert datetime.fromtimestamp(early.expires_at, scheduler.settings.timezone).isoformat() == "2026-10-17T23:59:00+03:00"
-    assert early.added_at == EPOCH
-    for _ in range(8):
-        scheduler.add_manual_reset("claude", "Full reset", "2026-10-21")
-    with pytest.raises(ValueError, match="10"):
-        scheduler.add_manual_reset("claude", "Full reset", "2026-10-22")
-    current[0] = early.expires_at
-    scheduler.add_manual_reset("claude", "Full reset", "2026-10-22")
-    assert len(state.manual_resets) == 10 and early not in state.manual_resets
-    removed = state.manual_resets[-1]
-    scheduler.remove_manual_reset("claude", removed.id)
-    assert len(state.manual_resets) == 9 and removed not in state.manual_resets
-    with pytest.raises(ValueError, match="not found"):
-        scheduler.remove_manual_reset("claude", "unknown")
-    current[0] = state.manual_resets[-1].expires_at
-    scheduler.remove_manual_reset("claude", state.manual_resets[-1].id)
-    assert state.manual_resets == []
-    assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
-
-
-@pytest.mark.parametrize("title,date", [("bad", "2026-10-20"), ([], "2026-10-20"), ("Full reset", "bad"), ("Full reset", "2026-02-30"), ("Full reset", "20261020"), ("Full reset", None), ("Full reset", "2026-10-16")])
-def test_manual_reset_invalid(title: Any, date: Any, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    with pytest.raises(ValueError):
-        scheduler.add_manual_reset("claude", title, date)
-    assert scheduler.states["claude"].manual_resets == []
-
-
-@pytest.mark.parametrize("time,utc", [
-    (None, "2026-10-20T20:59:00+00:00"),
-    ("00:00", "2026-10-19T21:00:00+00:00"),
-    ("09:30", "2026-10-20T06:30:00+00:00"),
-    ("23:59", "2026-10-20T20:59:00+00:00"),
-])
-def test_manual_reset_local_time(time: str | None, utc: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
-    scheduler = scheduler_for(settings_factory(STOKE_TIMEZONE="Europe/Istanbul"), FakeProvider())
-    times = () if time is None else (time,)
-    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", *times)
-    assert state.manual_resets[0].expires_at == int(datetime.fromisoformat(utc).timestamp())
-    assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
-
-
 @pytest.mark.parametrize("time", ["24:00", "9:30", "09:60", "09:30:00", " 09:30", "０９:３０", "", None, 930])
-def test_manual_reset_and_plan_invalid_time(time: Any, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    with pytest.raises(ValueError, match="^expires_time must be HH:MM$"):
-        scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", time)
+def test_plan_invalid_time(time: Any) -> None:
     with pytest.raises(ValueError, match="^time must be HH:MM$"):
         validate_plan(time, "once", None)
-
-
-def test_manual_reset_update_identity_sort_prune_persist(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    current = [EPOCH]
-    monkeypatch.setattr("stoke.clock.now", lambda: current[0])
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20", "09:30")
-    original = replace(state.manual_resets[0])
-    scheduler.add_manual_reset("claude", "Full reset", "2026-10-19")
-    state.manual_resets.append(ManualReset("expired", "Full reset", EPOCH, EPOCH - 1))
-    current[0] += 60
-    result = scheduler.update_manual_reset("claude", original.id, "5-hour reset", "2026-10-18", "10:15")
-    assert result is state
-    assert state.manual_resets[0] == ManualReset(
-        original.id, "5-hour reset", int(datetime.fromisoformat("2026-10-18T07:15:00+00:00").timestamp()), original.added_at,
-    )
-    assert len(state.manual_resets) == 2
-    assert state.manual_resets[0].expires_at < state.manual_resets[1].expires_at
-    assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
-
-
-def test_manual_reset_update_at_capacity(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    for _ in range(10):
-        state = scheduler.add_manual_reset("claude", "Full reset", "2026-10-20")
-    original = replace(state.manual_resets[-1])
-    scheduler.update_manual_reset("claude", original.id, "5-hour reset", "2026-10-19", "12:00")
-    assert len(state.manual_resets) == 10
-    assert state.manual_resets[0].id == original.id
-    assert state.manual_resets[0].added_at == original.added_at
-
-
-@pytest.mark.parametrize("id", ["unknown", "expired"])
-def test_manual_reset_update_unknown_or_expired(id: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("stoke.clock.now", lambda: EPOCH)
-    scheduler = scheduler_for(settings_factory(), FakeProvider())
-    scheduler.states["claude"].manual_resets = [ManualReset("expired", "Full reset", EPOCH, EPOCH - 1)]
-    with pytest.raises(ValueError, match="^manual reset id not found$"):
-        scheduler.update_manual_reset("claude", id, "Full reset", "2026-10-20", "12:00")
-
-
-def test_manual_reset_unsupported(settings_factory: Callable[..., Settings]) -> None:
-    scheduler = scheduler_for(settings_factory())
-    for operation in (lambda: scheduler.add_manual_reset("codex", "Full reset", "2026-10-20"), lambda: scheduler.update_manual_reset("codex", "a", "Full reset", "2026-10-20", "12:00"), lambda: scheduler.remove_manual_reset("codex", "a")):
-        with pytest.raises(ManualResetsUnsupported):
-            operation()
 
 
 @pytest.mark.parametrize("delta,warning", [(30 * 86400, None), (30 * 86400 - 1, "token_expiring"), (0, "token_expiring"), (-1, "token_expiring")])
@@ -765,26 +648,43 @@ def test_live_warning_priority_expiry_boundary_and_auth(delta: int, warning: str
     scheduler = scheduler_for(settings, FakeProvider())
     state = scheduler.states["claude"]
     def live() -> dict[str, Any]:
-        return serialize_tool(state, 1000, settings=settings, manual_resets_allowed=True, auth_labels=ClaudeProvider.auth_labels)
+        return serialize_tool(state, 1000, settings=settings, auth_labels=ClaudeProvider.auth_labels)
     assert live()["warning"] == warning and state.warning is None
-    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Browser login", "expires_at": None}}
-    assert live()["manual_resets_allowed"]
+    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Account login", "expires_at": None}}
     state.last_read = ReadRecord(900, False, "usage reader signed out", True)
     assert live()["warning"] == "read_signed_out" and state.warning is None
     for persisted in ("auto_stopped", "did_not_open_window", "limits_unreadable", "stoke_failing"):
         state.warning = persisted
         assert live()["warning"] == persisted
-    state.manual_resets = [ManualReset("0123456789ab", "Full reset", 1000, 900), ManualReset("abcdef012345", "5-hour reset", 1001, 900)]
-    assert len(live()["manual_resets"]) == 1
     persisted = serialize_tool(state)
-    assert len(persisted["manual_resets"]) == 2 and "auth" not in persisted and "manual_resets_allowed" not in persisted
+    assert "auth" not in persisted and "manual_resets_allowed" not in persisted
+    assert "manual_resets" not in persisted
+
+
+@pytest.mark.parametrize("days,expected", [(2.9, "read_login_expiring"), (3, "token_expiring"), (3.1, "token_expiring"), (-1, "read_login_expiring")])
+@pytest.mark.parametrize("token_soon", [False, True])
+def test_read_login_warning_threshold_priority_and_not_persisted(
+    days: float, expected: str, token_soon: bool, settings_factory: Callable[..., Settings],
+) -> None:
+    settings = replace(settings_factory(), claude_token_expires=1000 + (1 if token_soon else 60) * 86400)
+    state = scheduler_for(settings, FakeProvider()).states["claude"]
+    def live() -> dict[str, Any]:
+        return serialize_tool(state, 1000, settings=settings, auth_labels=ClaudeProvider.auth_labels,
+                              read_login_expires=1000 + int(days * 86400))
+    assert live()["warning"] == (None if expected == "token_expiring" and not token_soon else expected)
+    assert live()["auth"]["read"]["expires_at"] == 1000 + int(days * 86400)
+    assert state.warning is None and serialize_tool(state)["warning"] is None
+    state.last_read = ReadRecord(900, False, "usage reader signed out", True)
+    assert live()["warning"] == "read_signed_out"
+    for stored in ("auto_stopped", "did_not_open_window", "limits_unreadable", "stoke_failing"):
+        state.warning = stored
+        assert live()["warning"] == stored
 
 
 def test_dry_run_preserves_both_capabilities_and_auth(settings_factory: Callable[..., Settings]) -> None:
     providers = create_providers(settings_factory())
     for name, real in (("claude", ClaudeProvider), ("codex", CodexProvider)):
         assert callable(providers[name].read_limits)
-        assert providers[name].manual_resets is real.manual_resets
         assert providers[name].reset_closes_window is real.reset_closes_window
         assert providers[name].auth_labels == real.auth_labels
     async def no_wait(seconds: float) -> None:
@@ -802,25 +702,17 @@ def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Setti
         app = create_app(scheduler, settings)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             tools = (await client.get("/api/state")).json()["tools"]
-            assert tools["claude"]["refreshable"] and tools["claude"]["manual_resets_allowed"]
+            assert tools["claude"]["refreshable"] and "manual_resets" not in tools["claude"]
             assert tools["claude"]["warning"] == "token_expiring"
             assert tools["claude"]["auth"]["stoke"]["expires_at"] == settings.claude_token_expires
-            assert tools["codex"]["auth"] == {"shared": {"label": "ChatGPT login"}}
-            assert tools["codex"]["warning"] is None and not tools["codex"]["manual_resets_allowed"]
+            assert tools["codex"]["auth"] == {"shared": {"label": "Account login"}}
+            assert tools["codex"]["warning"] is None and "manual_resets_allowed" not in tools["codex"]
             for action, body in (("auto-refresh", {"enabled": True, "seconds": 90}), ("resets", {"title": "Full reset", "expires_on": "2026-10-20"}), ("resets/remove", {"id": "unknown"})):
                 assert (await client.post(f"/api/tools/claude/{action}", json=body)).status_code == 403
                 assert (await client.post(f"/api/tools/unknown/{action}", headers=HEADERS, json=body)).status_code == 404
             result = await client.post("/api/tools/claude/auto-refresh", headers=HEADERS, json={"enabled": True, "seconds": 3600})
             assert result.status_code == 200 and result.json()["auto_refresh"] == {"enabled": True, "seconds": 3600}
             assert load(scheduler.path, settings, providers)["claude"].auto_refresh == AutoRefresh(True, 3600)
-            result = await client.post("/api/tools/claude/resets", headers=HEADERS, json={"title": "Full reset", "expires_on": "2026-10-20"})
-            assert result.status_code == 200
-            id = result.json()["manual_resets"][0]["id"]
-            result = await client.post("/api/tools/claude/resets/remove", headers=HEADERS, json={"id": id})
-            assert result.status_code == 200 and result.json()["manual_resets"] == []
-            assert (await client.post("/api/tools/claude/resets/remove", headers=HEADERS, json={"id": id})).status_code == 422
-            for action in ("resets", "resets/remove"):
-                assert (await client.post(f"/api/tools/codex/{action}", headers=HEADERS, json={})).status_code == 404
     asyncio.run(scenario())
 
 
@@ -830,17 +722,10 @@ def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Setti
     ("auto-refresh", {"enabled": True, "seconds": 90.0}), ("auto-refresh", {"enabled": True, "seconds": 59}),
     ("auto-refresh", {"enabled": False, "seconds": 86401}),
     ("auto-refresh", {"enabled": True, "seconds": 90}), ("auto-refresh", {"enabled": True, "seconds": 3660}),
-    ("resets", {}), ("resets", {"title": "bad", "expires_on": "2026-10-20"}),
-    ("resets", {"title": "Full reset", "expires_on": "bad"}), ("resets", {"title": [], "expires_on": "2026-10-20"}),
-    ("resets", {"title": "Full reset", "expires_on": "2026-10-20", "extra": 1}),
-    ("resets/remove", {}), ("resets/remove", {"id": 1}), ("resets/remove", {"id": "unknown"}),
-    ("resets/remove", {"id": "unknown", "extra": True}),
 ])
 def test_api_new_endpoint_invalid_bodies(action: str, body: Any, settings_factory: Callable[..., Settings]) -> None:
     async def scenario() -> None:
         scheduler = scheduler_for(settings_factory(), FakeReader())
-        # Give the fake both capabilities to exercise strict HTTP validation.
-        scheduler.providers["codex"].manual_resets = True
         app = create_app(scheduler, scheduler.settings)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             for value in (body, [], None, True):

@@ -57,12 +57,20 @@ def optional_iso_epoch(value: Any) -> int | None:
         return None
 
 
+def plan_name(value: Any, *, prefix: str = "") -> str | None:
+    """Retain only a compact public tier name from a vendor response."""
+    if not isinstance(value, str) or re.fullmatch(r"[a-z0-9_]{1,40}", value) is None:
+        return None
+    if prefix:
+        value = value.removeprefix(prefix)
+    return " ".join(word.capitalize() for word in value.split("_"))
+
+
 class Provider(Protocol):
     """One tool's fixed stoke operation."""
 
     name: str
     label: str
-    manual_resets: bool
     reset_closes_window: bool
     auth_labels: dict[str, dict[str, str]]
 

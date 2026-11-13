@@ -25,12 +25,12 @@ Stoke sends one tiny message (`hi`) through the official CLI the moment a window
 | **Usage without a message** | **Refresh usage** reads current usage without starting a window (direct read-only GET first, official CLI as fallback; Claude uses a separate sign-in). Optional automatic refresh per tool (Settings, 10–60 minutes). |
 | **Plans** | Start a tool's window at a chosen local time, once or every day. Automatic stokes pause in the 5 hours before that time so an earlier window does not run into it. |
 | **Window offset** | With both tools on, the header shows the gap between their windows and suggests one-click plans that move them 2.5 h apart, so one of them always resets soon. |
-| **Limit resets** | Claude and Codex reset credits are read with their expiry. Claude also keeps manual reminders. Stoke never spends a credit. |
+| **Limit resets** | Claude and Codex reset credits are read from the vendor with their expiry and availability (Claude: Direct read only). Stoke never spends a credit. |
 | **Early weekly resets** | When a provider resets the weekly limit early, the panel shows a note and keeps the history (Info). |
 | **Early window resets** | For tools whose resets restart the window (Codex), a threshold chooses an immediate stoke or a wait to preserve the offset. Claude resets only usage and keeps its schedule. |
 | **Warnings** | A short line above the cards when something needs attention; see [Warnings](#warnings). |
 
-Only the official, unmodified `claude` and `codex` binaries talk to the providers. Stoke never calls a provider API with your credentials.
+Stokes use only the official, unmodified `claude` and `codex` binaries. Usage reads ask the vendor usage endpoints directly or use the official CLI.
 
 ## Requirements
 
@@ -107,7 +107,7 @@ Open http://127.0.0.1:8787. The header shows **DRY RUN**. Stop it with `Ctrl+C`,
    docker compose exec stoke stoke-login claude
    ```
 
-   Follow the instructions it prints to sign in. Stoking works without this step; only **Refresh usage** for Claude needs it.
+   Follow the instructions it prints to sign in. Stoking works without this step; only Claude's usage, reset credits and model limits need it. The login must be renewed about once a month; the panel warns 3 days before it expires.
 
 ### 3. Open the panel from other devices
 
@@ -128,11 +128,12 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 
 - **Settings** (sliders icon) and **Info** (info icon) are buttons in each card's header.
 - The **Auto-stoke** switch in the card's **Settings** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
-- **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (10 to 60 whole minutes). The API switch `POST /api/tools/{name}/read-mode` accepts `{"mode":"direct"}` (default) or `{"mode":"cli"}`. Direct Claude GETs are at least 10 minutes apart.
+- **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (10 to 60 whole minutes). **Read usage** in **Settings** selects **Direct** (default, with CLI fallback) or **Via CLI**. Claude reset credits are available only through Direct. Direct Claude GETs are at least 10 minutes apart.
 - Each tool accepts at most 6 **Stoke now** and 30 **Refresh usage** requests per rolling hour; more are refused (HTTP 429) with the time a slot frees up. Automatic stokes, plans and automatic refresh do not count. The counters live in memory and start over on restart.
 - **After an early reset** in **Settings** applies to tools whose resets restart the window (Codex): wait near the old end to preserve the offset (0–300 minutes, default 30; 0 stokes at once when auto-stoke is on). Claude resets only usage and keeps its schedule.
 - **Info** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
-- **Limit resets** on the card opens the list of available resets.
+- **Limit resets** on the card opens the vendor credit list, including expiry, availability and any cooldown. Stoke never spends one.
+- Claude's **Weekly · &lt;model&gt;** bars show model-specific weekly limits when the vendor provides them (Direct read). A switch in **Settings** hides or shows them; it is saved on the server, so every device sees the same, and defaults to on. **Info** shows the plan name next to **Sign-in**.
 - **Plan a stoke** sets a start time. In the 5 hours before it, automatic stokes wait; a manual stoke asks before it skips the plan. A plan is refused if the current window would still be open at that time.
 - **Gap** in the header (both tools on auto) opens suggested start times that move the two windows 2.5 h apart.
 - The round button at the top right switches between light, dark and the system theme. The choice is kept in that browser only.
@@ -146,6 +147,7 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 | Limits unreadable | The CLI answered, but stoke could not read the limits from it. | Usually temporary. If it persists after a CLI update, open an issue. |
 | Stoke keeps failing | Three or more failures in a row; stoke keeps retrying with backoff. | `docker compose logs stoke` shows the error. Check the token or sign-in. |
 | Usage reading signed out | The Claude usage reader's browser login expired. Stoking is not affected. | Run `docker compose exec stoke stoke-login claude` again. |
+| Usage login expires soon / Usage login expired | The account login that reads usage expires within 3 days or has expired; usage and reset credits stop being read after expiry. Stoking is not affected. | Run `docker compose exec stoke stoke-login claude` again. |
 | Stoke token expires soon | The Claude token from `claude setup-token` expires within 30 days. | Create a new one, update `.env`, run `docker compose up -d`. |
 
 ## Updating

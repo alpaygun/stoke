@@ -12,9 +12,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from . import clock, store
-from .config import Settings, parse_date, parse_time
+from .config import Settings
 from .cycles import CycleLog, CycleRecord
-from .models import AutoRefresh, READ_MODES, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
+from .models import AutoRefresh, READ_MODES, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
 logger = logging.getLogger(__name__)
@@ -47,10 +47,6 @@ class PlanUnreachable(ValueError):
 
 class RefreshUnsupported(Exception):
     """A tool has no official no-stoke limit reader."""
-
-
-class ManualResetsUnsupported(Exception):
-    """A tool does not accept manually entered reset credits."""
 
 
 def first_target(time: str, now: int, tz: ZoneInfo) -> int:
@@ -370,13 +366,17 @@ class Scheduler:
                         snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
                     )
                 state.limits_at = observed
+                if snapshot.scoped is not None:
+                    state.scoped_limits = snapshot.scoped
+                if snapshot.plan_name is not None:
+                    state.plan_name = snapshot.plan_name
                 if snapshot.resets is not None:
                     for entry in state.weekly_resets:
                         if entry.credits_before is not None:
                             if _credit_used(entry.credits_before, snapshot.resets.credits, observed):
                                 entry.kind = "credit"
                             entry.credits_before = None
-                    state.resets = ResetCredits(snapshot.resets.available, snapshot.resets.credits, now)
+                    state.resets = replace(snapshot.resets, read_at=now)
             if kept_window or state.window_closed_at is not None:
                 try:
                     resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
@@ -424,6 +424,17 @@ class Scheduler:
             except TimeoutError:
                 pass
 
+    def set_show_scoped(self, name: str, enabled: bool) -> ToolState:
+        """Persist model-scoped bar visibility without initiating a read."""
+        if name not in self.readers:
+            raise RefreshUnsupported(name)
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be bool")
+        state = self.states[name]
+        state.show_scoped = enabled
+        self._persist()
+        return state
+
     def set_read_mode(self, name: str, mode: str) -> ToolState:
         """Persist the selected reading path without initiating a read."""
         if name not in self.readers:
@@ -459,60 +470,6 @@ class Scheduler:
                 and state.five_hour is not None and state.five_hour.resets_at > now):
             state.next_stoke_at = reset_next(state, now, self.settings)
             self.events[name].set()
-        self._persist()
-        return state
-
-    def _manual_state(self, name: str) -> ToolState:
-        if not self.providers[name].manual_resets:
-            raise ManualResetsUnsupported(name)
-        return self.states[name]
-
-    def _manual_expiry(self, title: str, expires_on: str, expires_time: str, now: int) -> int:
-        """Validate a user-supplied title and future local expiry."""
-        if not isinstance(title, str) or title not in MANUAL_RESET_TITLES:
-            raise ValueError("title must be Full reset or 5-hour reset")
-        expires_at = int(datetime.combine(
-            parse_date(expires_on, "expires_on"), parse_time(expires_time, "expires_time"), self.settings.timezone,
-        ).timestamp())
-        if expires_at <= now:
-            raise ValueError("expiry must be in the future")
-        return expires_at
-
-    def add_manual_reset(self, name: str, title: str, expires_on: str, expires_time: str = "23:59") -> ToolState:
-        """Record a user-supplied credit with a local expiry date and time."""
-        state = self._manual_state(name)
-        now = clock.now()
-        expires_at = self._manual_expiry(title, expires_on, expires_time, now)
-        entries = [entry for entry in state.manual_resets if entry.expires_at > now]
-        if len(entries) >= 10:
-            raise ValueError("at most 10 manual resets are allowed")
-        entries.append(ManualReset(uuid4().hex[:12], title, expires_at, now))
-        state.manual_resets = sorted(entries, key=lambda entry: entry.expires_at)
-        self._persist()
-        return state
-
-    def update_manual_reset(self, name: str, id: str, title: str, expires_on: str, expires_time: str) -> ToolState:
-        """Edit a live credit without changing its identity or added time."""
-        state = self._manual_state(name)
-        now = clock.now()
-        entries = [entry for entry in state.manual_resets if entry.expires_at > now]
-        if not isinstance(id, str) or not any(entry.id == id for entry in entries):
-            raise ValueError("manual reset id not found")
-        expires_at = self._manual_expiry(title, expires_on, expires_time, now)
-        state.manual_resets = sorted(
-            [replace(entry, title=title, expires_at=expires_at) if entry.id == id else entry for entry in entries],
-            key=lambda entry: entry.expires_at,
-        )
-        self._persist()
-        return state
-
-    def remove_manual_reset(self, name: str, id: str) -> ToolState:
-        """Remove a credit without spending it, also pruning expired entries."""
-        state = self._manual_state(name)
-        if not isinstance(id, str) or not any(entry.id == id for entry in state.manual_resets):
-            raise ValueError("manual reset id not found")
-        now = clock.now()
-        state.manual_resets = [entry for entry in state.manual_resets if entry.id != id and entry.expires_at > now]
         self._persist()
         return state
 

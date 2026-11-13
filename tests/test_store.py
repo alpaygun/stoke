@@ -8,8 +8,144 @@ import pytest
 
 from conftest import FakeProvider
 from stoke.config import Settings
-from stoke.models import Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, ToolState, Window, serialize_tool
+from stoke.models import Plan, PlanOutcome, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, Window, serialize_tool
 from stoke.store import load, save
+
+
+@pytest.mark.parametrize("legacy", [None, [], [{}], {"invalid": True}, [{"id": "old", "title": "Full reset", "expires_at": 2000, "added_at": 900}]])
+def test_legacy_manual_resets_are_ignored_without_losing_state(
+    legacy: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    states["claude"].five_hour, states["claude"].auto_stoke = Window(42, 20000, 300), True
+    save(path, states)
+    data = json.loads(path.read_text())
+    data["claude"]["manual_resets"] = legacy
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    assert load(path, settings, providers) == states
+    assert "using defaults" not in caplog.text
+    save(path, states)
+    assert "manual_resets" not in json.loads(path.read_text())["claude"]
+
+
+@pytest.mark.parametrize("legacy", [None, [], [{}], {"invalid": True}, [{"label": "Claude Code", "percent": 100}]])
+def test_legacy_usage_breakdown_is_ignored_without_losing_state(
+    legacy: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    states["claude"].five_hour, states["claude"].auto_stoke = Window(42, 20000, 300), True
+    save(path, states)
+    data = json.loads(path.read_text())
+    data["claude"]["usage_breakdown"] = legacy
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    restored = load(path, settings, providers)
+    assert restored == states
+    assert "using defaults" not in caplog.text
+    save(path, restored)
+    assert "usage_breakdown" not in json.loads(path.read_text())["claude"]
+
+
+@pytest.mark.parametrize("value", [True, False, None, 1, 0, 1.0, 0.0, "false", [], {}])
+def test_show_scoped_lenient_load_and_round_trip(
+    value: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider(), "codex": FakeProvider("codex")}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    for state in states.values():
+        state.five_hour, state.auto_stoke = Window(42, 20000, 300), True
+    save(path, states)
+    data = json.loads(path.read_text())
+    del data["claude"]["show_scoped"]
+    data["codex"]["show_scoped"] = value
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    restored = load(path, settings, providers)
+    states["codex"].show_scoped = value if isinstance(value, bool) else True
+    assert restored == states
+    assert "using defaults" not in caplog.text
+    save(path, restored)
+    assert json.loads(path.read_text())["codex"]["show_scoped"] is states["codex"].show_scoped
+    assert load(path, settings, providers) == restored
+
+
+def test_direct_details_and_credit_status_round_trip(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    state = states["claude"]
+    state.scoped_limits = [ScopedLimit("Fable", 23, 5000), ScopedLimit("Other", 40, None)]
+    state.plan_name = "Max 20x"
+    state.resets = ResetCredits(3, [ResetCredit("Full reset", None, 6000, usable) for usable in (True, False, None)], 1000, 2000)
+    save(path, states)
+    assert load(path, settings, providers) == states
+
+
+@pytest.mark.parametrize("bad", [None, True, 1, 1.5, "bad", {}, []])
+def test_optional_direct_fields_never_corrupt_stored_state(
+    bad: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    state = states["claude"]
+    state.five_hour, state.auto_stoke = Window(42, 20000, 300), True
+    state.resets = ResetCredits(1, [ResetCredit("Full reset", None, 6000)], 1000)
+    save(path, states)
+    data = json.loads(path.read_text())
+    item = data["claude"]
+    for key in ("scoped_limits", "plan_name"):
+        item[key] = bad
+    item["resets"]["credits"][0]["usable"] = bad
+    item["resets"]["cooldown_until"] = bad
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    restored = load(path, settings, providers)["claude"]
+    assert restored.five_hour == state.five_hour and restored.auto_stoke
+    assert restored.scoped_limits == []
+    assert restored.plan_name == (bad if isinstance(bad, str) else None)
+    assert restored.resets.credits[0].usable == (bad if type(bad) is bool else None)
+    assert restored.resets.cooldown_until == (bad if type(bad) is int else None)
+    assert "using defaults" not in caplog.text
+    for key in ("scoped_limits", "plan_name"):
+        del item[key]
+    del item["resets"]["cooldown_until"], item["resets"]["credits"][0]["usable"]
+    path.write_text(json.dumps(data))
+    assert load(path, settings, providers) == states
+
+
+def test_malformed_optional_rows_are_skipped(settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    states["claude"].five_hour = Window(42, 20000, 300)
+    save(path, states)
+    data = json.loads(path.read_text())
+    invalid = [None, [], {}, {"label": 42, "used_percent": 10}, {"label": " "},
+               {"label": "bad", "used_percent": True},
+               {"label": "bad", "used_percent": float("nan")},
+               {"label": "bad", "used_percent": -1}]
+    data["claude"]["scoped_limits"] = invalid + [
+        {"label": "bad", "used_percent": 10, "resets_at": True},
+        {"label": " Fable ", "used_percent": 23, "resets_at": None, "id": "ignored"}]
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    restored = load(path, settings, providers)["claude"]
+    assert restored.five_hour == states["claude"].five_hour
+    assert restored.scoped_limits == [ScopedLimit("Fable", 23, None)]
+    assert "using defaults" not in caplog.text
 
 
 @pytest.mark.parametrize("limits_at", [None, 0, 1002])
@@ -53,7 +189,7 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
         assert state.limits_at is None
         assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None, "manual_resets": [], "weekly_resets": [], "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct"}
+        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None, "scoped_limits": [], "show_scoped": True, "plan_name": None, "weekly_resets": [], "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct"}
     assert "using defaults" not in caplog.text
 
 

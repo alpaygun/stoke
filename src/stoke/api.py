@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from math import ceil
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,7 +14,7 @@ from .config import Settings
 from .models import ToolState, serialize_tool
 from .providers.base import ProviderError
 from .ratelimit import MANUAL_STOKES_PER_WINDOW, RATE_WINDOW_SECONDS, REFRESHES_PER_WINDOW, SlidingWindowLimiter
-from .scheduler import AlreadyRunning, ManualResetsUnsupported, PlanConflict, RefreshUnsupported, Scheduler
+from .scheduler import AlreadyRunning, PlanConflict, RefreshUnsupported, Scheduler
 
 STATIC_PAGE = Path(__file__).resolve().parents[2] / "static" / "index.html"
 
@@ -71,7 +71,6 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         return serialize_tool(
             state, clock.now() if now is None else now,
             refreshable=scheduler.can_refresh(state.name), settings=settings,
-            manual_resets_allowed=scheduler.providers[state.name].manual_resets,
             auth_labels=scheduler.providers[state.name].auth_labels,
             reset_closes_window=scheduler.reset_closes_window[state.name],
             read_login_expires=read_expiry() if callable(read_expiry) else None,
@@ -184,6 +183,20 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             raise HTTPException(422, str(error)) from None
         return serialize(state)
 
+    @app.post("/api/tools/{name}/show-scoped")
+    async def set_show_scoped(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        if not scheduler.can_refresh(name):
+            raise HTTPException(404, "refresh not supported")
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"enabled"}:
+                raise ValueError("body must contain exactly enabled: bool")
+            state = scheduler.set_show_scoped(name, body["enabled"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return serialize(state)
+
     @app.post("/api/tools/{name}/read-mode")
     async def set_read_mode(name: str, request: Request) -> dict[str, Any]:
         require_tool(name)
@@ -222,44 +235,6 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             if not isinstance(body, dict) or set(body) != {"minutes"}:
                 raise ValueError("body must contain exactly minutes: int")
             state = scheduler.set_reset_hold(name, body["minutes"])
-        except ValueError as error:
-            raise HTTPException(422, str(error)) from None
-        return serialize(state)
-
-    @app.post("/api/tools/{name}/resets")
-    async def add_reset(name: str, request: Request) -> dict[str, Any]:
-        return await change_reset(name, request, action="add")
-
-    @app.post("/api/tools/{name}/resets/update")
-    async def update_reset(name: str, request: Request) -> dict[str, Any]:
-        return await change_reset(name, request, action="update")
-
-    @app.post("/api/tools/{name}/resets/remove")
-    async def remove_reset(name: str, request: Request) -> dict[str, Any]:
-        return await change_reset(name, request, action="remove")
-
-    async def change_reset(name: str, request: Request, *, action: Literal["add", "update", "remove"]) -> dict[str, Any]:
-        require_tool(name)
-        if not scheduler.providers[name].manual_resets:
-            raise HTTPException(404, "manual resets not supported")
-        try:
-            body = await request.json()
-            keys = {"id"} if action == "remove" else {"title", "expires_on"}
-            optional = {"expires_time"} if action == "add" else set()
-            fields = "id: str" if action == "remove" else "title: str and expires_on: YYYY-MM-DD, with optional expires_time: HH:MM"
-            if action == "update":
-                keys |= {"id", "expires_time"}
-                fields = "id: str, title: str, expires_on: YYYY-MM-DD and expires_time: HH:MM"
-            if not isinstance(body, dict) or not keys <= set(body) <= keys | optional or any(not isinstance(value, str) for value in body.values()):
-                raise ValueError("body must contain exactly " + fields)
-            if action == "remove":
-                state = scheduler.remove_manual_reset(name, body["id"])
-            elif action == "update":
-                state = scheduler.update_manual_reset(name, body["id"], body["title"], body["expires_on"], body["expires_time"])
-            else:
-                state = scheduler.add_manual_reset(name, body["title"], body["expires_on"], body.get("expires_time", "23:59"))
-        except ManualResetsUnsupported:
-            raise HTTPException(404, "manual resets not supported") from None
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         return serialize(state)

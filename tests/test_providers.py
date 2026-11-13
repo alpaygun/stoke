@@ -537,7 +537,7 @@ def test_rate_limits_real_shape_and_sorted_credits(fixture_text: Callable[[str],
     assert snapshot.weekly == Window(7.0, 1792307650, 10080)
     assert snapshot.resets is not None and snapshot.resets.available == 3 and snapshot.resets.read_at == 0
     assert [credit.expires_at for credit in snapshot.resets.credits] == [1792697290, 1793042890, 1793388490]
-    assert all(set(asdict(credit)) == {"title", "granted_at", "expires_at"} for credit in snapshot.resets.credits)
+    assert all(set(asdict(credit)) == {"title", "granted_at", "expires_at", "usable"} for credit in snapshot.resets.credits)
 
 
 def test_reset_title_truncation_does_not_leave_trailing_whitespace() -> None:
@@ -690,5 +690,5 @@ def test_dry_run_reader_usage_credits_and_failure(
         assert snapshot == LimitsSnapshot(Window(3, now + 120, 300), Window(27, now + 7 * 86400, 10080), ResetCredits(3, [
             ResetCredit("Full reset (Weekly + 5 hr)", now + offset - 30 * 86400, now + offset)
             for offset in (2 * 86400 + 5000, 18 * 86400, 26 * 86400)
-        ], 0))
+        ], 0), plan_name="Plus")
     assert delays == [1.0]

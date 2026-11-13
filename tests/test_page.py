@@ -135,8 +135,8 @@ def test_dialog_layout_and_minutes_input() -> None:
     }
     assert page.by_id["weekly-page"]["attrs"]["inputmode"] == "numeric"
     footers = {"plan": ["plan-remove", "plan-save"], "settings": ["settings-save"],
-               "reset": ["reset-save"], "weekly": ["weekly-prev", "weekly-next"]}
-    for name in ("plan", "offset", "settings", "info", "reset", "weekly"):
+               "weekly": ["weekly-prev", "weekly-next"]}
+    for name in ("plan", "offset", "settings", "info", "weekly"):
         dialog = page.by_id[f"{name}-dialog"]
         assert dialog["tag"] == "dialog"
         form, = dialog["children"]
@@ -194,7 +194,9 @@ def test_early_reset_settings_stepper_and_save_order() -> None:
     form, = page.by_id["settings-dialog"]["children"]
     _, body, _ = form["children"]
     boxes = body["children"]
-    assert boxes.index(page.by_id["rh-box"]) == boxes.index(page.by_id["ar-box"]) + 1
+    assert boxes.index(page.by_id["ss-box"]) == boxes.index(page.by_id["ar-box"]) + 1
+    assert boxes.index(page.by_id["rm-box"]) == boxes.index(page.by_id["ss-box"]) + 1
+    assert boxes.index(page.by_id["rh-box"]) == boxes.index(page.by_id["rm-box"]) + 1
     box = page.by_id["rh-box"]
     assert box["attrs"]["class"] == "settings-box"
     row, sub = box["children"]
@@ -217,8 +219,10 @@ def test_early_reset_settings_stepper_and_save_order() -> None:
     assert "rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);" in PAGE
     auto = PAGE.index("if (autoChanged) await post(name, 'auto', { enabled });")
     refresh = PAGE.index("if (arChanged) await post(name, 'auto-refresh', body);")
+    scoped = PAGE.index("if (ssChanged) await post(name, 'show-scoped', { enabled: ssEnabled.checked });")
     hold = PAGE.index("if (rhChanged) await post(name, 'reset-hold', { minutes });")
-    assert auto < refresh < hold
+    mode = PAGE.index("if (rmChanged) await post(name, 'read-mode', { mode });")
+    assert auto < refresh < scoped < mode < hold
 
 
 def test_reset_provider_capability_controls_settings_visibility_and_save() -> None:
@@ -246,7 +250,110 @@ def test_reset_rows_separate_expiry_and_remaining_time() -> None:
     assert "el('span', 'reset-left', `in ${span(left)}`)" in PAGE
 
 
-def test_plan_and_reset_settings_cards_and_segmented_choices() -> None:
+def test_vendor_reset_tile_status_cooldown_and_footer() -> None:
+    assert not re.search(r"manual_resets|manualResets|resets\.manual|resets/(update|remove)|openReset|reset-dialog|reset-blocked|reset-actions|reset-tools|reset-note|if \(false\)", PAGE)
+    assert "if (tool.refreshable) stats.append(resetTile(tool));" in PAGE
+    assert "resets: tool.resets" in PAGE
+    assert "if (credit.usable === false)" in PAGE
+    assert "item.classList.add('blocked');" in PAGE
+    name = PAGE.index("item.append(el('span', 'reset-name', credit.title));")
+    chip = PAGE.index("item.append(el('span', 'chip small', 'Not usable'));")
+    expiry = PAGE.index("item.append(expiry);")
+    assert name < chip < expiry
+    assert ".reset-item.blocked .reset-name { color: var(--text-2); }" in PAGE
+    assert "resets.cooldown_until > current" in PAGE
+    assert "`cooldown until ${clock(resets.cooldown_until)}`" in PAGE
+    assert "Cooldown until ${when(resets.cooldown_until, current)}: no reset can be used before then." in PAGE
+    assert "note.append(icon('clock')" in PAGE
+    assert "'reset-footer'" in PAGE
+    assert re.search(r"\.reset-footer\s*\{[^}]*border-top: 1px solid var\(--line\);[^}]*padding: 10px 12px 0", PAGE)
+    assert "`As of ${readTime(resets.read_at, current)}` : 'Not read yet.'" in PAGE
+    assert "Use them in the ${tool.label} app or CLI. Stoke never spends one." in PAGE
+    assert "Refresh usage to read available resets. Stoke never spends one." in PAGE
+
+
+def test_scoped_limits_and_plan_heading_without_product_shares() -> None:
+    assert "scoped: tool.scoped_limits ?? []" in PAGE
+    assert "show_scoped: tool.show_scoped ?? true" in PAGE
+    assert "planName: tool.plan_name ?? null" in PAGE
+    assert "if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit =>" in PAGE
+    scoped = PAGE.index("`Weekly · ${limit.label}`")
+    weekly_end = PAGE.index("if (weekly) group.append(text('span', 'weekly-reset'")
+    assert scoped < weekly_end
+    assert "Math.abs(limit.resets_at - tool.weeklyAt) > 3600" in PAGE
+    assert "`resets ${when(limit.resets_at, now())}`" in PAGE
+    history = PAGE.index("'Weekly resets'", PAGE.index("function infoContent"))
+    signin = PAGE.index("'Sign-in'", history)
+    assert history < signin
+    assert "Weekly use by product" not in PAGE
+    assert "breakdown" not in PAGE
+    assert "if (tool.planName) h.append(el('span', 'plan-name', `${tool.planName} plan`));" in PAGE
+    assert re.search(r"\.signin-h \.plan-name\s*\{[^}]*text-transform: none", PAGE)
+
+
+def test_scoped_limit_settings_switch_visibility_label_and_save() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    box = page.by_id["ss-box"]
+    assert box["attrs"]["class"] == "settings-box"
+    row, = box["children"]
+    assert row["attrs"]["class"] == "settings-row"
+    tile, copy, switch = row["children"]
+    assert tile["tag"] == "span"
+    assert tile["attrs"] == {"class": "settings-tile", "data-settings-icon": "info"}
+    assert copy["attrs"]["class"] == "settings-copy"
+    title, subtitle = copy["children"]
+    assert title is page.by_id["ss-title"] and title["tag"] == "strong"
+    assert subtitle["text"] == "Shows the model's own weekly limit on the card"
+    assert switch["attrs"] == {"id": "ss-enabled", "type": "checkbox", "class": "switch"}
+    helper = re.search(r"function openSettings\(name\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    assert "ssBox.hidden = !(tool.refreshable && tool.scoped_limits?.length);" in helper[1]
+    assert "const ssTitle = `${tool.scoped_limits?.[0]?.label ?? ''} weekly limit`;" in helper[1]
+    assert "document.querySelector('#ss-title').textContent = ssTitle;" in helper[1]
+    assert "ssEnabled.setAttribute('aria-label', ssTitle);" in helper[1]
+    assert "ssEnabled.checked = tool.show_scoped ?? true;" in helper[1]
+    sync = re.search(r"function syncSettings\(\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert sync and "ssEnabled.disabled = settingsSaving || ssBox.hidden;" in sync[1]
+    assert "const ssChanged = !ssBox.hidden && ssEnabled.checked !== (tool.show_scoped ?? true);" in PAGE
+
+
+def test_login_expiry_chips_and_warning() -> None:
+    helper = re.search(r"function signinState\(tool, current = now\(\)\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    assert "left < 30 * 86400" in helper[1] and "left < 3 * 86400" in helper[1]
+    assert "'warning'" not in helper[1]
+    assert "? 'cross' : null" in helper[1]
+    assert "soon && level === 'ok' ? 'warn' : level" in helper[1]
+    assert "`${span(left)} left`" in helper[1]
+    assert "chipLine(line, row.login.chip)" in PAGE
+    assert "grid-template-columns: minmax(0, 1fr) auto" in PAGE
+    assert "['read_login_expiring', ['Usage login expires soon', '']]" in PAGE
+    assert "left <= 0 ? 'Usage login expired' : 'Usage login expires soon'" in PAGE
+    assert "The account login that reads ${tool.label} usage" in PAGE
+    assert "has expired; usage and reset credits are no longer read." in PAGE
+    assert "['read_signed_out', 'read_login_expiring'].includes(tool.warningKey)" in PAGE
+    assert "caution: ['token_expiring', 'read_login_expiring'].includes(tool.warning)" in PAGE
+
+
+def test_read_method_settings_and_refresh_interval_bounds() -> None:
+    assert "rmBox.hidden = !tool.refreshable;" in PAGE
+    assert "r.value === (tool.read_mode ?? 'direct')" in PAGE
+    assert "r.disabled = settingsSaving || rmBox.hidden" in PAGE
+    assert "const rmChanged = tool.refreshable && mode !== tool.read_mode;" in PAGE
+    assert "!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged" in PAGE
+    for hint in ("Asks the usage endpoint directly; falls back to the CLI if needed",
+                 "Asks the official CLI only. Reset credits are not available", "Asks the official CLI only"):
+        assert hint in PAGE
+    assert "seconds < 600 || seconds > 3600" in PAGE
+    assert "arMinus.disabled = disabled || Number(arValue.value) <= 10;" in PAGE
+    assert "Math.max(10, Math.round(ar.seconds / 60))" in PAGE
+    assert "Math.max(10, (direction > 0 ? Math.floor(minutes / 5) + 1 : Math.ceil(minutes / 5) - 1) * 5)" in PAGE
+    assert "Enter 10 to 60 minutes." in PAGE
+    assert "Anthropic limits how often usage can be read: Claude usage is read at most once every 10 minutes." in PAGE
+
+
+def test_plan_and_read_settings_cards_and_segmented_choices() -> None:
     page = ElementParser()
     page.feed(PAGE)
 
@@ -256,7 +363,7 @@ def test_plan_and_reset_settings_cards_and_segmented_choices() -> None:
         ]
 
     groups = {}
-    for name, count in (("plan", 3), ("reset", 2)):
+    for name, count in (("plan", 3), ("settings", 5)):
         form, = page.by_id[f"{name}-dialog"]["children"]
         _, body, _ = form["children"]
         boxes = [node for node in body["children"] if node["attrs"].get("class") == "settings-box"]
@@ -282,50 +389,15 @@ def test_plan_and_reset_settings_cards_and_segmented_choices() -> None:
                              ("plan-block", {"settings-caution", "danger"})):
         caution, = [node for node in plan_body["children"] if page.by_id[control] in node["children"]]
         assert set(caution["attrs"]["class"].split()) == classes
-    assert set(groups) == {"repeat", "auto_after", "reset-type"}
+    assert set(groups) == {"repeat", "auto_after", "read_mode"}
     for name, values in (("repeat", ["once", "daily"]),
                          ("auto_after", ["keep", "on", "off"]),
-                         ("reset-type", ["Full reset", "5-hour reset"])):
+                         ("read_mode", ["direct", "cli"])):
         assert [radio["value"] for radio in groups[name]] == values
         assert [radio["value"] for radio in groups[name] if "checked" in radio] == values[:1]
     assert page.by_id["plan-block"]["attrs"]["role"] == "status"
     assert "hidden" in page.by_id["plan-block"]["attrs"]
     assert "document.querySelectorAll('[data-settings-icon]')" in PAGE
-
-
-def test_manual_reset_time_and_edit_dialog() -> None:
-    page = ElementParser()
-    page.feed(PAGE)
-    form, = page.by_id["reset-dialog"]["children"]
-    _, body, _ = form["children"]
-    _, expiry, _ = body["children"]
-    assert expiry["attrs"]["class"] == "settings-box"
-    head, sub = expiry["children"]
-    _, copy = head["children"]
-    title, timezone = copy["children"]
-    assert title["tag"] == "strong" and title["text"] == "Expires"
-    assert timezone["attrs"]["id"] == "reset-timezone"
-    assert "settings-sub" in sub["attrs"]["class"].split()
-    row, = sub["children"]
-    assert row["attrs"]["class"] == "reset-expiry"
-    assert [child["attrs"]["id"] for child in row["children"]] == ["reset-date", "reset-time"]
-    for name, label, kind in (("reset-date", "Date", "date"), ("reset-time", "Time", "time")):
-        control = page.by_id[name]
-        assert control["tag"] == "input"
-        assert control["attrs"]["type"] == kind
-        assert control["attrs"]["aria-label"] == label
-        assert "required" in control["attrs"]
-    assert page.by_id["reset-time"]["attrs"]["value"] == "23:59"
-    assert "await post(resetTool, editing ? 'resets/update' : 'resets', body)" in PAGE
-    assert "expires_time: document.querySelector('#reset-time').value" in PAGE
-    assert "if (editing) body.id = resetId;" in PAGE
-    assert "const date = localDate(credit.expires_at);" in PAGE
-    assert "document.querySelector('#reset-time').value = clock(credit.expires_at);" in PAGE
-    assert "`${tool.name}:reset-edit:${credit.id}`" in PAGE
-    assert "edit.disabled = busy.has(tool.name);" in PAGE
-    assert "actions.append(edit, remove);" in PAGE
-    assert "credit ? `Edit ${label} limit reset` : `Add a ${label} limit reset`" in PAGE
-    assert "credit ? 'Save' : 'Add'" in PAGE
 
 
 def test_toast_is_a_manual_popover_outside_app() -> None:

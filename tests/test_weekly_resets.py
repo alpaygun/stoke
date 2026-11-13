@@ -136,6 +136,8 @@ def test_weekly_refresh_acceptance_and_scheduling(
     ([replace(CREDIT, expires_at=950)], [], "early"),
     ([replace(CREDIT, expires_at=1000)], [], "early"),
     ([CREDIT], [replace(CREDIT)], "early"),
+    ([replace(CREDIT, usable=True)], [replace(CREDIT, usable=False)], "early"),
+    ([replace(CREDIT, usable=False)], [replace(CREDIT, usable=None)], "early"),
     ([CREDIT], [replace(CREDIT, title="Other")], "credit"),
     ([CREDIT], [replace(CREDIT, granted_at=11)], "credit"),
     ([CREDIT], [replace(CREDIT, expires_at=700001)], "credit"),

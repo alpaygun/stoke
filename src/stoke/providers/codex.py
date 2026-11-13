@@ -12,7 +12,7 @@ from ..httpget import HttpGet, HttpGetError, http_get
 from ..version import stoke_version
 from ..models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window, sanitize_reset_title
 from ..runner import RpcError, RpcRunner, Runner, run_command, run_jsonrpc
-from .base import LimitsUnreadable, ProviderError, json_objects, optional_iso_epoch, parse_window, short_error
+from .base import LimitsUnreadable, ProviderError, json_objects, optional_iso_epoch, parse_window, plan_name, short_error
 
 ARGV = ("codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "hi")
 DELETE_ARGV_PREFIX = ("codex", "delete", "--force")
@@ -129,9 +129,8 @@ class CodexProvider:
 
     name = "codex"
     label = "Codex"
-    manual_resets = False
     reset_closes_window = True
-    auth_labels = {"shared": {"label": "ChatGPT login"}}
+    auth_labels = {"shared": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command, rpc: RpcRunner = run_jsonrpc, http: HttpGet = http_get) -> None:
         self.settings = settings
@@ -191,7 +190,7 @@ class CodexProvider:
         secondary = limits.get("secondary_window")
         weekly = None if secondary is None else window(secondary)
         resets = await self._read_direct_credits(headers)
-        return LimitsSnapshot(five_hour, weekly, resets)
+        return LimitsSnapshot(five_hour, weekly, resets, plan_name=plan_name(payload.get("plan_type")))
 
     async def _read_direct_credits(self, headers: Mapping[str, str]) -> ResetCredits | None:
         """A credits failure must never discard a successful usage read."""

@@ -66,6 +66,7 @@ class ResetCredit:
     title: str
     granted_at: int | None
     expires_at: int
+    usable: bool | None = None
 
 
 @dataclass
@@ -75,6 +76,16 @@ class ResetCredits:
     available: int
     credits: list[ResetCredit]
     read_at: int
+    cooldown_until: int | None = None
+
+
+@dataclass
+class ScopedLimit:
+    """A model-scoped weekly limit without vendor identifiers."""
+
+    label: str
+    used_percent: float
+    resets_at: int | None
 
 
 @dataclass
@@ -85,6 +96,8 @@ class LimitsSnapshot:
     weekly: Window | None
     resets: ResetCredits | None
     observed_at: int | None = None
+    scoped: list[ScopedLimit] | None = None
+    plan_name: str | None = None
 
 
 @dataclass
@@ -134,19 +147,6 @@ class ReadRecord:
     signed_out: bool
 
 
-MANUAL_RESET_TITLES = {"Full reset", "5-hour reset"}
-
-
-@dataclass
-class ManualReset:
-    """A reset credit entered by the user and never spent by stoke."""
-
-    id: str
-    title: str
-    expires_at: int
-    added_at: int
-
-
 @dataclass
 class WeeklyReset:
     """A permanent observation of an early weekly limit reset."""
@@ -185,16 +185,18 @@ class ToolState:
     plan_outcome: PlanOutcome | None = None
     auto_refresh: AutoRefresh = field(default_factory=AutoRefresh)
     last_read: ReadRecord | None = None
-    manual_resets: list[ManualReset] = field(default_factory=list)
     weekly_resets: list[WeeklyReset] = field(default_factory=list)
     window_closed_at: int | None = None
     reset_hold_minutes: int = 30
     read_mode: str = "direct"
+    scoped_limits: list[ScopedLimit] = field(default_factory=list)
+    show_scoped: bool = True
+    plan_name: str | None = None
 
 
 def serialize_tool(
     state: ToolState, now: int | None = None, refreshable: bool = False,
-    *, settings: "Settings | None" = None, manual_resets_allowed: bool = False,
+    *, settings: "Settings | None" = None,
     auth_labels: dict[str, dict[str, str]] | None = None,
     reset_closes_window: bool = True,
     read_login_expires: int | None = None,
@@ -214,8 +216,6 @@ def serialize_tool(
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
         data["reset_closes_window"] = reset_closes_window
-        data["manual_resets_allowed"] = manual_resets_allowed
-        data["manual_resets"] = [asdict(entry) for entry in state.manual_resets if entry.expires_at > now]
         for entry in data["weekly_resets"]:
             del entry["credits_before"]
         data["auth"] = {key: dict(value) for key, value in (auth_labels or {}).items()}
@@ -227,6 +227,8 @@ def serialize_tool(
         if state.warning is None:
             if state.last_read is not None and state.last_read.signed_out:
                 data["warning"] = "read_signed_out"
+            elif read_login_expires is not None and read_login_expires - now < 3 * 86400:
+                data["warning"] = "read_login_expiring"
             elif expires is not None and expires - now < 30 * 86400:
                 data["warning"] = "token_expiring"
         data["upcoming_at"], data["upcoming_planned"] = effective_next(state, settings)

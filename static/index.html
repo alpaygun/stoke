@@ -205,7 +205,7 @@
     .reset-left { margin-left: auto; color: var(--text-3); }
     .reset-item.soon { background: var(--caution-soft); box-shadow: inset 3px 0 0 var(--accent-ink); }
     .reset-item.soon .reset-when, .reset-item.soon .reset-left { color: var(--accent-ink); }
-    .reset-note { font-size: 12px; color: var(--text-3); margin-top: 10px; }
+    .reset-footer { display: grid; gap: 4px; border-top: 1px solid var(--line); padding: 10px 12px 0; margin-top: 10px; font-size: 12px; }
     .text-button { min-height: 32px; padding: 2px 0; border: 0; background: transparent; color: var(--accent-ink); font-size: 13px; }
     .text-button:hover:not(:disabled) { text-decoration: underline; }
     dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-tile); background: var(--surface); color: var(--text); }
@@ -247,19 +247,21 @@
     .weekly-pages .icon-button:disabled { color: var(--text-4); }
     #weekly-prev svg { transform: scaleX(-1); }
 
-    .reset-item .text-button { min-height: 24px; margin-block: -4px; font-size: 12px; }
-    .reset-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
-    .reset-expiry { display: flex; flex: 1; gap: 10px; min-width: 0; }
-    .reset-expiry .field { min-width: 0; max-width: 100%; }
-    #reset-date { flex: 1; min-width: 0; }
-    .reset-actions { grid-column: 2; grid-row: 1; display: flex; gap: 12px; }
+    .reset-item.blocked .reset-name { color: var(--text-2); }
+    .reset-cooldown { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border-radius: var(--radius-box); background: var(--caution-soft); color: var(--accent-ink); font-size: 12px; }
+    .reset-cooldown .ic { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+    .scoped-label { margin-top: 6px; }
+    .signin-h { display: flex; align-items: baseline; gap: 8px; }
+    .signin-h .plan-name { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-2); }
+    .chip.small { padding: 2px 8px; font-size: 11px; line-height: 16px; white-space: nowrap; justify-self: end; }
+    .chip-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; }
     .status-ok { color: var(--text-2); }
     .status-warn { color: var(--accent-ink); }
     .status-bad { color: var(--danger-ink); }
     .field { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-field); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; }
     .field.num { width: 56px; text-align: center; }
     .field:disabled { color: var(--text-4); }
-    #settings-dialog .dialog-body, #plan-dialog .dialog-body, #reset-dialog .dialog-body { gap: 12px; }
+    #settings-dialog .dialog-body, #plan-dialog .dialog-body { gap: 12px; }
     .settings-box { border-radius: var(--radius-box); background: var(--surface-2); }
     .settings-row { display: flex; align-items: center; min-height: 56px; gap: 12px; padding: 12px 14px; }
     .settings-tile { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); }
@@ -392,7 +394,6 @@
       .refresh { gap: 6px; font-size: 13px; }
       .card { padding: 20px; }
       .dial-body { justify-content: center; }
-      #reset-date { min-width: 0; max-width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
       .switch, .switch::after { transition: none; }
@@ -520,6 +521,25 @@
             </div>
           </div>
         </section>
+        <section id="ss-box" class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="info"></span>
+            <div class="settings-copy"><strong id="ss-title"></strong><span>Shows the model's own weekly limit on the card</span></div>
+            <input id="ss-enabled" type="checkbox" class="switch">
+          </div>
+        </section>
+        <section id="rm-box" class="settings-box">
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="refresh"></span>
+            <div class="settings-copy"><strong>Read usage</strong><span id="rm-hint">Asks the usage endpoint directly; falls back to the CLI if needed</span></div>
+          </div>
+          <div class="settings-row settings-sub">
+            <div class="segmented" role="radiogroup" aria-label="Read usage">
+              <label><input type="radio" name="read_mode" value="direct" checked> Direct</label>
+              <label><input type="radio" name="read_mode" value="cli"> Via CLI</label>
+            </div>
+          </div>
+        </section>
         <section id="rh-box" class="settings-box">
           <div class="settings-row">
             <span class="settings-tile" data-settings-icon="undo"></span>
@@ -535,7 +555,7 @@
             </div>
           </div>
         </section>
-        <p id="settings-caution" class="settings-caution"><span data-settings-icon="info"></span><span>Anthropic limits how often usage can be read, so 5 minutes or more is safer for Claude.</span></p>
+        <p id="settings-caution" class="settings-caution"><span data-settings-icon="info"></span><span>Anthropic limits how often usage can be read: Claude usage is read at most once every 10 minutes.</span></p>
         <p id="settings-message" class="small failed" role="status" hidden></p>
       </div>
       <div class="dialog-actions">
@@ -568,44 +588,6 @@
       </div>
     </div>
   </dialog>
-  <dialog id="reset-dialog" aria-labelledby="reset-title">
-    <form id="reset-form" class="plan-form">
-      <div class="dialog-head">
-        <h2 id="reset-title">Add a limit reset</h2>
-        <button id="reset-close" type="button" class="dialog-x" aria-label="Close"></button>
-      </div>
-      <div class="dialog-body">
-        <section class="settings-box">
-          <div class="settings-row">
-            <span class="settings-tile" data-settings-icon="undo"></span>
-            <div class="settings-copy"><strong>Type</strong><span>As shown in Claude</span></div>
-          </div>
-          <div class="settings-row settings-sub">
-            <div class="segmented" role="radiogroup" aria-label="Type">
-              <label><input type="radio" name="reset-type" value="Full reset" checked> Full reset</label>
-              <label><input type="radio" name="reset-type" value="5-hour reset"> 5-hour reset</label>
-            </div>
-          </div>
-        </section>
-        <section class="settings-box">
-          <div class="settings-row">
-            <span class="settings-tile" data-settings-icon="clock"></span>
-            <div class="settings-copy"><strong>Expires</strong><span id="reset-timezone">Local time · UTC</span></div>
-          </div>
-          <div class="settings-row settings-sub">
-            <div class="reset-expiry">
-              <input id="reset-date" class="field" type="date" aria-label="Date" required>
-              <input type="time" id="reset-time" class="field" aria-label="Time" value="23:59" required>
-            </div>
-          </div>
-        </section>
-        <div class="settings-caution"><span data-settings-icon="info"></span><p>Copy it from Claude → Settings → Usage → Limit resets; keep 23:59 if no time is shown. Stoke can't see when you use it, so remove it here afterwards.</p></div>
-      </div>
-      <div class="dialog-actions">
-        <button id="reset-save" type="submit" class="stoke">Add</button>
-      </div>
-    </form>
-  </dialog>
   <script>
     'use strict';
 
@@ -633,7 +615,8 @@
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
       ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']],
       ['read_signed_out', ['Usage reading signed out', 'The browser login that reads usage has expired. Stoking is not affected. Sign in again from the stoke folder on the server:']],
-      ['token_expiring', ['Stoke token expires soon', '']]
+      ['token_expiring', ['Stoke token expires soon', '']],
+      ['read_login_expiring', ['Usage login expires soon', '']]
     ]);
     const LOGIN_COMMAND = 'docker compose exec stoke stoke-login claude';
     const dialogOpen = () => !!document.querySelector('dialog[open]');
@@ -724,6 +707,11 @@
         warning = [left <= 0 ? 'Stoke token expired' : 'Stoke token expires soon',
           `The 1-year token that stokes Claude ${left <= 0 ? 'has expired; stoking has stopped.' : `expires in ${Math.ceil(left / 86400)} days; after that, stoking stops.`} Create a new one with claude setup-token, put it in .env and restart stoke.`];
       }
+      if (tool.warning === 'read_login_expiring') {
+        const left = tool.auth.read.expires_at - current;
+        warning = [left <= 0 ? 'Usage login expired' : 'Usage login expires soon',
+          `The account login that reads ${tool.label} usage ${left <= 0 ? 'has expired; usage and reset credits are no longer read.' : `expires in ${span(left)}; after that, usage and reset credits are no longer read.`} Stoking is not affected. Sign in again from the stoke folder on the server:`];
+      }
       const lastDuration = last?.duration_ms != null ? `${(last.duration_ms / 1000).toFixed(1)} s` : '—';
       const lastAgo = last ? `${span(current - last.at)} ago` : '';
       const nextAt = nextTs != null ? clock(nextTs) : 'off';
@@ -735,11 +723,12 @@
       return {
         name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
         refreshable: !!tool.refreshable, refreshing: !!tool.refreshing,
-        resets: tool.manual_resets_allowed ? { manual: true, credits: tool.manual_resets, available: tool.manual_resets.length } : tool.resets,
-        auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: tool.warning === 'token_expiring',
+        resets: tool.resets, scoped: tool.scoped_limits ?? [], show_scoped: tool.show_scoped ?? true, weeklyAt: weekly?.resets_at ?? null,
+        planName: tool.plan_name ?? null,
+        auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: ['token_expiring', 'read_login_expiring'].includes(tool.warning),
         weeklyResets: tool.weekly_resets ?? [],
         autoRefreshText: tool.auto_refresh?.enabled ? `auto-refresh every ${interval(tool.auto_refresh.seconds)}` : '',
-        manualResets: !!tool.manual_resets_allowed, upcomingPlanned: !!tool.upcoming_planned,
+        upcomingPlanned: !!tool.upcoming_planned,
         plan: tool.plan, plan_outcome: tool.plan_outcome, quiet_from: tool.quiet_from,
         open, elapsed, remaining,
         windowRange: five ? `${clock(start)} → ${clock(end)}` : '—',
@@ -755,7 +744,7 @@
         dialLabel: open && five ? `Window ${Math.round(elapsed * 100)}% elapsed, ${remaining} left` : 'Window closed',
         dialCaption: open && five ? `left · ends ${clock(end)}` : 'window closed',
         hasWarning: !!tool.warning, warning: warning ? warning[0] : tool.warning,
-        warningDetail: tool.warning ? (['read_signed_out', 'token_expiring'].includes(tool.warning) ? warning[1] : `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.`) : ''
+        warningDetail: tool.warning ? (['read_signed_out', 'token_expiring', 'read_login_expiring'].includes(tool.warning) ? warning[1] : `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.`) : ''
       };
     }
     function interval(seconds) {
@@ -923,7 +912,7 @@
       const box = el('div', `warning${tool.caution ? ' caution' : ''}`), copy = el('div');
       box.append(icon('warning'));
       copy.append(el('strong', '', tool.warning), el('br'), el('span', '', tool.warningDetail));
-      if (tool.warningKey === 'read_signed_out') copy.append(el('code', 'command', LOGIN_COMMAND));
+      if (['read_signed_out', 'read_login_expiring'].includes(tool.warningKey)) copy.append(el('code', 'command', LOGIN_COMMAND));
       box.append(copy);
       return box;
     }
@@ -970,7 +959,8 @@
       head.setAttribute('aria-label', `${tool.label} limit resets`);
       const sorted = [...(resets?.credits ?? [])].sort((a, b) => a.expires_at - b.expires_at);
       const first = sorted[0];
-      const sub = first ? `expires in ${span(first.expires_at - current)}` : resets ? (resets.manual ? 'none added' : 'none available') : 'not read yet';
+      const cooling = resets?.cooldown_until != null && resets.cooldown_until > current;
+      const sub = cooling ? `cooldown until ${clock(resets.cooldown_until)}` : first ? `expires in ${span(first.expires_at - current)}` : resets ? 'none available' : 'not read yet';
       head.append(el('span', 'stat-head', 'Limit resets'), el('span', 'stat-value', resets?.available ?? '—'), el('span', 'stat-sub', sub));
       box.append(head);
       const pop = el('div', 'popover-surface reset-pop'), list = el('ul', 'reset-list');
@@ -980,36 +970,24 @@
         const expiry = el('span', 'mono reset-when');
         expiry.append(el('span', '', `expires ${when(credit.expires_at, current)}`),
           el('span', 'reset-left', `in ${span(left)}`));
-        item.append(el('span', 'reset-name', credit.title), expiry);
-        if (resets?.manual) {
-          const actions = el('div', 'reset-actions'), edit = el('button', 'text-button', 'Edit');
-          edit.setAttribute('type', 'button');
-          edit.setAttribute('data-key', `${tool.name}:reset-edit:${credit.id}`);
-          edit.setAttribute('data-tool', tool.name);
-          edit.disabled = busy.has(tool.name);
-          edit.addEventListener('click', () => openReset(tool.name, credit));
-          const remove = el('button', 'text-button', 'Remove');
-          remove.setAttribute('type', 'button');
-          remove.setAttribute('data-key', `${tool.name}:reset-remove:${credit.id}`);
-          remove.setAttribute('data-tool', tool.name);
-          remove.disabled = busy.has(tool.name);
-          remove.addEventListener('click', () => act(tool.name, 'resets/remove', { id: credit.id }));
-          actions.append(edit, remove);
-          item.append(actions);
+        item.append(el('span', 'reset-name', credit.title));
+        if (credit.usable === false) {
+          item.classList.add('blocked');
+          item.append(el('span', 'chip small', 'Not usable'));
         }
+        item.append(expiry);
         list.append(item);
       });
+      if (cooling) {
+        const note = el('p', 'reset-cooldown');
+        note.append(icon('clock'), el('span', '', `Cooldown until ${when(resets.cooldown_until, current)}: no reset can be used before then.`));
+        pop.append(note);
+      }
       if (sorted.length) pop.append(list);
-      if (resets?.manual) {
-        const tools = el('div', 'reset-tools'), add = el('button', 'text-button');
-        add.append(icon('plus'), el('span', '', 'Add a reset'));
-        add.setAttribute('type', 'button');
-        add.setAttribute('data-key', `${tool.name}:reset-add`);
-        add.addEventListener('click', () => openReset(tool.name));
-        tools.append(add);
-        pop.append(tools);
-        pop.append(el('p', 'reset-note', `Entered by you: stoke can't read ${tool.label}'s resets. Remove one after you use it in the ${tool.label} app. Stoke never spends one.`));
-      } else pop.append(el('p', 'reset-note', resets ? `As of ${readTime(resets.read_at, current)}. Use them from the Codex app or CLI. Stoke only shows them; it never spends one.` : 'Not read yet. Refresh usage to read available resets. Stoke only shows them; it never spends one.'));
+      const footer = el('div', 'reset-footer');
+      footer.append(el('span', 'muted', resets ? `As of ${readTime(resets.read_at, current)}` : 'Not read yet.'),
+        el('span', '', resets ? `Use them in the ${tool.label} app or CLI. Stoke never spends one.` : 'Refresh usage to read available resets. Stoke never spends one.'));
+      pop.append(footer);
       box.append(pop);
       item.append(box);
       return item;
@@ -1314,10 +1292,15 @@
       if (auth.stoke) {
         const expires = auth.stoke.expires_at, left = expires - current, soon = expires != null && left < 30 * 86400;
         const day = expires == null ? null : localDate(expires);
-        const expiry = expires == null ? 'expiry not set' : `expires ${day.day} ${MONTHS[day.month - 1]} ${day.year}${soon ? ` · ${left <= 0 ? 'expired' : `in ${span(left)}`}` : ''}`;
-        rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok', icon: soon ? 'warning' : null });
+        const expiry = expires == null ? 'expiry not set' : `expires ${day.day} ${MONTHS[day.month - 1]} ${day.year}`;
+        rows.push({ title: 'Stoking', kind: auth.stoke.label, status: expiry, level: soon ? 'warn' : 'ok', icon: null, chip: soon ? (left <= 0 ? 'expired' : `${span(left)} left`) : null });
       }
-      if (auth.read) rows.push({ title: 'Reading usage', kind: auth.read.label, status, level, icon: readIcon });
+      if (auth.read) {
+        const at = auth.read.expires_at, left = at - current, soon = at != null && left < 3 * 86400;
+        const d = at == null ? null : localDate(at);
+        const login = at == null ? null : { level: soon ? 'warn' : 'ok', text: `expires ${d.day} ${MONTHS[d.month - 1]} ${d.year}`, chip: soon ? (left <= 0 ? 'expired' : `${span(left)} left`) : null };
+        rows.push({ title: 'Reading usage', kind: auth.read.label, status, level: soon && level === 'ok' ? 'warn' : level, icon: readIcon, login });
+      }
       return rows;
     }
     const dialogFocus = new Map();
@@ -1326,6 +1309,11 @@
       head.append(el('strong', '', entry.kind === 'credit' ? 'Reset credit used' : 'Reset early'),
         el('span', 'muted', `weekly ${Math.round(entry.before_used)}% → ${Math.round(entry.after_used)}%`));
       copy.append(head, el('span', 'mono', weeklyRange(entry)));
+      return box;
+    }
+    function chipLine(line, label) {
+      const box = el('div', 'chip-line');
+      box.append(line, el('span', 'chip small', label));
       return box;
     }
     function infoContent(tool) {
@@ -1346,7 +1334,9 @@
       }
       parts.push(resets);
       const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
-      section.append(el('h3', '', 'Sign-in'));
+      const h = el('h3', 'signin-h', 'Sign-in');
+      if (tool.planName) h.append(el('span', 'plan-name', `${tool.planName} plan`));
+      section.append(h);
       signinState(tool).forEach(row => {
         const kind = row.title === 'Stoking' ? 'flame' : row.title === 'Reading usage' ? 'refresh' : 'key';
         const { box, copy } = infoRow(kind, row.level === 'ok' ? '' : row.level), head = el('div', 'row-head');
@@ -1354,7 +1344,12 @@
         const status = el('span', `mono status-line status-${row.level}`);
         if (row.icon) status.append(icon(row.icon));
         status.append(el('span', '', row.status));
-        copy.append(head, status);
+        copy.append(head, row.chip ? chipLine(status, row.chip) : status);
+        if (row.login) {
+          const line = el('span', `mono status-line status-${row.login.level}`);
+          line.append(el('span', '', row.login.text));
+          copy.append(row.login.chip ? chipLine(line, row.login.chip) : line);
+        }
         rows.append(box);
       });
       section.append(rows);
@@ -1476,6 +1471,8 @@
     const autoEnabled = document.querySelector('#auto-enabled'), arBox = document.querySelector('#ar-box');
     const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value');
     const arMinus = document.querySelector('#ar-minus'), arPlus = document.querySelector('#ar-plus');
+    const ssBox = document.querySelector('#ss-box'), ssEnabled = document.querySelector('#ss-enabled');
+    const rmBox = document.querySelector('#rm-box'), readModes = document.querySelectorAll('input[name="read_mode"]');
     const rhBox = document.querySelector('#rh-box'), rhValue = document.querySelector('#rh-value');
     const rhMinus = document.querySelector('#rh-minus'), rhPlus = document.querySelector('#rh-plus');
     const settingsMessage = document.querySelector('#settings-message'), settingsSave = document.querySelector('#settings-save');
@@ -1484,14 +1481,16 @@
     function arSeconds() { return Number(arValue.value) * 60; }
     function syncSettings() {
       const seconds = arSeconds();
-      const arBad = !arBox.hidden && (!/^\d{1,2}$/.test(arValue.value) || seconds < 60 || seconds > 3600);
+      const arBad = !arBox.hidden && (!/^\d{1,2}$/.test(arValue.value) || seconds < 600 || seconds > 3600);
       const rhBad = !rhBox.hidden && (!/^\d{1,3}$/.test(rhValue.value) || Number(rhValue.value) > 300);
       const bad = arBad || rhBad;
       const disabled = settingsSaving || arBox.hidden || !arEnabled.checked;
       autoEnabled.disabled = settingsSaving;
       arEnabled.disabled = settingsSaving || arBox.hidden;
+      ssEnabled.disabled = settingsSaving || ssBox.hidden;
+      readModes.forEach(r => { r.disabled = settingsSaving || rmBox.hidden; });
       arValue.disabled = disabled;
-      arMinus.disabled = disabled || Number(arValue.value) <= 1;
+      arMinus.disabled = disabled || Number(arValue.value) <= 10;
       arPlus.disabled = disabled || Number(arValue.value) >= 60;
       rhValue.disabled = settingsSaving || rhBox.hidden;
       rhMinus.disabled = rhValue.disabled || Number(rhValue.value) <= 0;
@@ -1499,7 +1498,7 @@
       document.querySelector('#ar-interval').classList.toggle('dimmed', !arEnabled.checked);
       settingsSave.disabled = settingsSaving || bad;
       document.querySelector('#settings-close').disabled = settingsSaving;
-      settingsMessage.textContent = arBad ? 'Enter 1 to 60 minutes.' : rhBad ? 'Enter 0 to 300 minutes.' : '';
+      settingsMessage.textContent = arBad ? 'Enter 10 to 60 minutes.' : rhBad ? 'Enter 0 to 300 minutes.' : '';
       settingsMessage.hidden = !bad;
     }
     function openSettings(name) {
@@ -1509,20 +1508,35 @@
       document.querySelector('#settings-title').textContent = `${tool.label} settings`;
       autoEnabled.checked = tool.auto_stoke;
       arBox.hidden = !tool.refreshable;
+      ssBox.hidden = !(tool.refreshable && tool.scoped_limits?.length);
+      const ssTitle = `${tool.scoped_limits?.[0]?.label ?? ''} weekly limit`;
+      document.querySelector('#ss-title').textContent = ssTitle;
+      ssEnabled.setAttribute('aria-label', ssTitle);
+      ssEnabled.checked = tool.show_scoped ?? true;
       rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);
       rhValue.value = tool.reset_hold_minutes;
       arEnabled.checked = ar.enabled;
-      arValue.value = Math.min(60, Math.max(1, Math.round(ar.seconds / 60)));
+      arValue.value = Math.min(60, Math.max(10, Math.round(ar.seconds / 60)));
       document.querySelector('#settings-caution').hidden = name !== 'claude';
+      rmBox.hidden = !tool.refreshable;
+      readModes.forEach(r => { r.checked = r.value === (tool.read_mode ?? 'direct'); });
+      syncReadHint();
       syncSettings();
       dialogFocus.set(settingsDialog, document.activeElement?.dataset?.key);
       openDialog(settingsDialog);
     }
+    function syncReadHint() {
+      const cli = document.querySelector('input[name="read_mode"]:checked')?.value === 'cli';
+      document.querySelector('#rm-hint').textContent = cli
+        ? (settingsTool === 'claude' ? 'Asks the official CLI only. Reset credits are not available' : 'Asks the official CLI only')
+        : 'Asks the usage endpoint directly; falls back to the CLI if needed';
+    }
+    document.querySelectorAll('input[name="read_mode"]').forEach(r => r.addEventListener('input', syncReadHint));
     arEnabled.addEventListener('input', () => syncSettings());
     arValue.addEventListener('input', () => { digitsOnly(arValue); syncSettings(); });
     function stepMinutes(direction) {
       const minutes = Number(arValue.value);
-      arValue.value = Math.min(60, Math.max(1, (direction > 0 ? Math.floor(minutes / 5) + 1 : Math.ceil(minutes / 5) - 1) * 5));
+      arValue.value = Math.min(60, Math.max(10, (direction > 0 ? Math.floor(minutes / 5) + 1 : Math.ceil(minutes / 5) - 1) * 5));
       syncSettings();
     }
     arMinus.addEventListener('click', () => stepMinutes(-1));
@@ -1544,9 +1558,12 @@
       const body = { enabled: arEnabled.checked, seconds: arSeconds() };
       const autoChanged = enabled !== tool.auto_stoke;
       const arChanged = tool.refreshable && (body.enabled !== tool.auto_refresh.enabled || body.seconds !== tool.auto_refresh.seconds);
+      const ssChanged = !ssBox.hidden && ssEnabled.checked !== (tool.show_scoped ?? true);
+      const mode = document.querySelector('input[name="read_mode"]:checked').value;
+      const rmChanged = tool.refreshable && mode !== tool.read_mode;
       const minutes = Math.min(300, Math.max(0, Number(rhValue.value)));
       const rhChanged = tool.refreshable && tool.reset_closes_window && minutes !== tool.reset_hold_minutes;
-      if (!autoChanged && !arChanged && !rhChanged) { settingsDialog.close(); return; }
+      if (!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged) { settingsDialog.close(); return; }
       settingsSaving = true;
       busy.add(name);
       syncControls();
@@ -1554,6 +1571,8 @@
       try {
         if (autoChanged) await post(name, 'auto', { enabled });
         if (arChanged) await post(name, 'auto-refresh', body);
+        if (ssChanged) await post(name, 'show-scoped', { enabled: ssEnabled.checked });
+        if (rmChanged) await post(name, 'read-mode', { mode });
         if (rhChanged) await post(name, 'reset-hold', { minutes });
         settingsDialog.close();
         toast('ok', `${tool.label} settings saved`);
@@ -1567,49 +1586,7 @@
         syncControls();
       }
     });
-    const resetDialog = document.querySelector('#reset-dialog');
-    const resetForm = document.querySelector('#reset-form');
-    let resetTool = null, resetId = null, resetSaving = false;
-    function openReset(name, credit = null) {
-      if (resetSaving) return;
-      resetTool = name;
-      resetId = credit?.id ?? null;
-      resetForm.reset();
-      if (credit) {
-        resetForm.querySelectorAll('[name="reset-type"]').forEach(input => { input.checked = input.value === credit.title; });
-        const date = localDate(credit.expires_at);
-        document.querySelector('#reset-date').value = `${date.year}-${pad(date.month)}-${pad(date.day)}`;
-        document.querySelector('#reset-time').value = clock(credit.expires_at);
-      }
-      const label = state.tools[name].label;
-      document.querySelector('#reset-timezone').textContent = `Local time · ${state.timezone ?? 'UTC'}`;
-      document.querySelector('#reset-title').textContent = credit ? `Edit ${label} limit reset` : `Add a ${label} limit reset`;
-      document.querySelector('#reset-save').textContent = credit ? 'Save' : 'Add';
-      dialogFocus.set(resetDialog, document.activeElement?.dataset?.key);
-      openDialog(resetDialog);
-    }
-    document.querySelector('#reset-close').addEventListener('click', () => resetDialog.close());
-    resetForm.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (resetSaving) return;
-      const body = { title: resetForm.querySelector('[name="reset-type"]:checked').value, expires_on: document.querySelector('#reset-date').value, expires_time: document.querySelector('#reset-time').value };
-      const editing = resetId !== null;
-      if (editing) body.id = resetId;
-      resetSaving = true;
-      resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = true; });
-      try {
-        await post(resetTool, editing ? 'resets/update' : 'resets', body);
-        await refresh();
-        resetDialog.close();
-        toast('ok', editing ? 'Reset updated' : 'Reset added');
-      } catch (failure) {
-        toast('fail', `Couldn't ${editing ? 'update' : 'add'} the reset: ${failure.message}`);
-      } finally {
-        resetSaving = false;
-        resetForm.querySelectorAll('input, button').forEach(control => { control.disabled = false; });
-      }
-    });
-    [settingsDialog, infoDialog, resetDialog, weeklyDialog].forEach(dialog => {
+    [settingsDialog, infoDialog, weeklyDialog].forEach(dialog => {
       dialog.querySelectorAll('button, input, select').forEach((control, index) => {
         control.setAttribute('data-key', control.id || `${dialog.id}:${index}`);
       });
@@ -1714,7 +1691,7 @@
     async function act(name, action, body) {
       if (busy.has(name) || (action === 'refresh' && !state?.tools[name]?.refreshable)) return;
       const label = state.tools[name].label;
-      deferredFocus = action === 'resets/remove' ? `${name}:resets` : document.activeElement?.dataset?.key ?? null;
+      deferredFocus = document.activeElement?.dataset?.key ?? null;
       busy.add(name);
       inFlightActions.set(name, action);
       syncControls();
@@ -1736,11 +1713,10 @@
           if (last?.ok) toast('ok', `${label} stoked`);
           else toast('fail', `${label} stoke failed: ${last?.error || 'unknown error'}`);
         } else if (action === 'refresh') toast('ok', `${label} usage updated`);
-        else if (action === 'resets/remove') toast('ok', 'Reset removed');
       } catch (failure) {
         const context = action === 'stoke' ? `Couldn't stoke ${label}`
           : action === 'refresh' ? `Couldn't read ${label} usage`
-          : action === 'resets/remove' ? "Couldn't remove the reset" : "Couldn't dismiss";
+          : "Couldn't dismiss";
         const message = failure.code === 'rate_limited' && typeof failure.retry_at === 'number'
           ? `${context}: limit of ${failure.limit} per hour reached. Try again at ${clock(failure.retry_at)}.`
           : `${context}: ${failure.message}`;
@@ -1842,7 +1818,7 @@
           line.append(icon('clock'), el('span', '', `Plan ${tool.plan.time}`));
           next.append(line);
         }
-        if (tool.refreshable || tool.manualResets) stats.append(resetTile(tool));
+        if (tool.refreshable) stats.append(resetTile(tool));
         card.append(heading, body, stats);
         const actions = el('div', 'actions');
         actions.append(stokeControl(tool), refreshControl(tool), planButton(tool));
@@ -1860,6 +1836,17 @@
       fill.style.width = `${clamp((weekly ? tool.weeklyNum : tool.fiveUsedNum) / 100) * 100}%`;
       track.append(fill);
       group.append(label, track);
+      if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit => {
+        const row = el('div', 'usage-label scoped-label');
+        row.append(el('span', 'muted', `Weekly · ${limit.label}`), el('span', 'mono', `${Math.round(limit.used_percent)}%`));
+        const t = el('div', 'track scoped-track'), f = el('div', 'fill weekly-fill');
+        f.style.width = `${clamp(limit.used_percent / 100) * 100}%`;
+        t.append(f);
+        group.append(row, t);
+        if (limit.resets_at != null && tool.weeklyAt != null && Math.abs(limit.resets_at - tool.weeklyAt) > 3600) {
+          group.append(el('span', 'weekly-reset', `resets ${when(limit.resets_at, now())}`));
+        }
+      });
       if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
       if (weekly && (tool.limitsAt || tool.autoRefreshText)) {
         const row = el('div', 'meta-row');

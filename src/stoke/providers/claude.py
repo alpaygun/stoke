@@ -2,15 +2,16 @@
 
 import json
 import logging
+import math
 from math import ceil
 from typing import Any
 
 from .. import clock
 from ..config import Settings
 from ..httpget import HttpGet, HttpGetError, http_get
-from ..models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window
+from ..models import LimitsSnapshot, ResetCredit, ResetCredits, ScopedLimit, StokeResult, Window
 from ..runner import Runner, run_command
-from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, iso_epoch, json_objects, optional_iso_epoch, parse_window, short_error
+from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, iso_epoch, json_objects, optional_iso_epoch, parse_window, plan_name, short_error
 
 ARGV = (
     "claude", "-p", "hi", "--output-format", "stream-json", "--verbose",
@@ -56,9 +57,40 @@ def _reset_credits(value: Any, now: int) -> ResetCredits | None:
             elif clears and all(member == "five_hour" for member in clears):
                 title = "5-hour reset"
         granted = optional_iso_epoch(grant.get("starts_at"))
-        credits.extend(ResetCredit(title, granted, expires) for _ in range(min(count, 20)))
+        usable = grant.get("usable_now")
+        credits.extend(ResetCredit(title, granted, expires, usable if type(usable) is bool else None)
+                       for _ in range(min(count, 20)))
     credits.sort(key=lambda credit: credit.expires_at)
-    return ResetCredits(len(credits), credits, 0)
+    return ResetCredits(len(credits), credits, 0, optional_iso_epoch(value.get("cooldown_until")))
+
+
+def _display_percent(entry: Any, label: Any) -> tuple[str, float] | None:
+    """Validate an optional display row, clamping finite numeric percentages."""
+    if not isinstance(label, str) or not label.strip():
+        return None
+    percent = entry.get("percent")
+    if type(percent) not in {int, float} or (type(percent) is float and not math.isfinite(percent)):
+        return None
+    # Clamp before float conversion so even very large JSON integers are safe.
+    percent = float(min(100, max(0, percent)))
+    return label.strip()[:40], percent
+
+
+def _scoped_limits(value: Any) -> list[ScopedLimit] | None:
+    if not isinstance(value, list):
+        return None
+    limits = []
+    for entry in value:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
+            continue
+        scope = entry.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        display = _display_percent(entry, model.get("display_name") if isinstance(model, dict) else None)
+        if display is not None:
+            limits.append(ScopedLimit(*display, optional_iso_epoch(entry.get("resets_at"))))
+        if len(limits) >= 5:
+            break
+    return limits
 
 
 def _usage_window(value: Any, minutes: int) -> Window:
@@ -93,9 +125,8 @@ class ClaudeProvider:
 
     name = "claude"
     label = "Claude"
-    manual_resets = True
     reset_closes_window = False
-    auth_labels = {"stoke": {"label": "1-year token"}, "read": {"label": "Browser login"}}
+    auth_labels = {"stoke": {"label": "1-year token"}, "read": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command, http: HttpGet = http_get) -> None:
         self.settings = settings
@@ -186,10 +217,14 @@ class ClaudeProvider:
         weekly = limits.get("seven_day")
         breakdown = limits.get("seven_day_breakdown")
         observed = optional_iso_epoch(breakdown.get("as_of")) if isinstance(breakdown, dict) else None
+        cedar = limits.get("cedar_ember")
+        props = cedar.get("event_props") if isinstance(cedar, dict) else None
         return LimitsSnapshot(
             _usage_window(limits.get("five_hour"), 300),
             None if weekly is None else _usage_window(weekly, 10080),
             _reset_credits(limits.get("cedar_ember"), clock.now()), observed,
+            scoped=_scoped_limits(limits.get("limits")),
+            plan_name=plan_name(props.get("tier") if isinstance(props, dict) else None, prefix="claude_"),
         )
 
     async def _read_via_cli(self) -> LimitsSnapshot:

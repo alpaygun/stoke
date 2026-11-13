@@ -6,7 +6,7 @@ from typing import Awaitable, Callable
 
 from .. import clock
 from ..config import Settings
-from ..models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window
+from ..models import LimitsSnapshot, ResetCredit, ResetCredits, ScopedLimit, StokeResult, Window
 from .base import ProviderError
 
 
@@ -16,7 +16,7 @@ class DryRunProvider:
     def __init__(
         self, name: str, label: str, settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        *, manual_resets: bool = False, auth_labels: dict[str, dict[str, str]] | None = None,
+        *, auth_labels: dict[str, dict[str, str]] | None = None,
         reset_closes_window: bool = True, read_login_expiry: bool = False,
     ) -> None:
         self.read_login_expiry = read_login_expiry
@@ -25,7 +25,6 @@ class DryRunProvider:
         self.label = label
         self.settings = settings
         self.sleep = sleep
-        self.manual_resets = manual_resets
         self.reset_closes_window = reset_closes_window
         self.auth_labels = {key: dict(value) for key, value in (auth_labels or {}).items()}
 
@@ -61,12 +60,14 @@ class DryRunReader(DryRunProvider):
             for offset in (2 * 86400 + 5000, 18 * 86400, 26 * 86400)
         ]
         resets = ResetCredits(3, credits, 0)
-        if self.manual_resets:
+        if self.name == "claude":
             resets = None if mode == "cli" else ResetCredits(2, [
-                ResetCredit("Fable reset", None, now + 4 * 86400),
-                ResetCredit("Full reset", None, now + 27 * 86400),
+                ResetCredit("Fable reset", None, now + 4 * 86400, True),
+                ResetCredit("Full reset", None, now + 27 * 86400, True),
             ], 0)
         return LimitsSnapshot(
             Window(3.0, now + self.settings.dry_run_window_seconds, 300),
             Window(27.0, now + 7 * 24 * 3600, 10080), resets,
+            scoped=[ScopedLimit("Fable", 23.0, now + 7 * 86400)] if mode == "direct" and self.name == "claude" else None,
+            plan_name=("Pro" if self.name == "claude" else "Plus") if mode == "direct" else None,
         )

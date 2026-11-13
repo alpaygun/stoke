@@ -12,7 +12,7 @@ import pytest
 
 from conftest import FakeProvider, FakeReader
 from stoke.config import Settings
-from stoke.models import ReadRecord, LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, Window
+from stoke.models import ReadRecord, LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, StokeResult, ToolState, Window
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
@@ -1054,6 +1054,64 @@ def test_refresh_rejected_while_stoke_running(settings_factory: Callable[..., Se
         provider.release.set()
         await stoke
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("observed", [899, 900, 1000])
+@pytest.mark.parametrize("details", ["absent", "provided", "empty"])
+def test_refresh_optional_details_acceptance_and_persistence(
+    observed: int, details: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeReader("claude")
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.scoped_limits = [ScopedLimit("Previous", 10, 500000)]
+    state.plan_name, state.limits_at = "Previous plan", 900
+    before = deepcopy(state)
+    scoped = None if details == "absent" else [ScopedLimit("Fable", 23, 600000)] if details == "provided" else []
+    plan = "Pro" if details == "provided" else None
+    provider.read_result = replace(provider.read_result, observed_at=observed, scoped=scoped, plan_name=plan,
+                                   resets=ResetCredits(1, [ResetCredit("Full reset", 10, 700000, False)], 0, 2000))
+    asyncio.run(scheduler.refresh_limits("claude"))
+    accepted = observed >= 900
+    assert state.scoped_limits == (scoped if accepted and scoped is not None else before.scoped_limits)
+    assert state.plan_name == (plan if accepted and plan is not None else before.plan_name)
+    assert state.resets == (replace(provider.read_result.resets, read_at=1000) if accepted else None)
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"] == state
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_show_scoped_setting_persists_without_reading_or_waking_loops(
+    name: str, settings_factory: Callable[..., Settings],
+) -> None:
+    provider = FakeReader(name)
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states[name]
+    state.five_hour, state.next_stoke_at = Window(42, 20000, 300), 20090
+    before = deepcopy(state)
+    for enabled in (False, True):
+        assert scheduler.set_show_scoped(name, enabled) is state
+        assert state == replace(before, show_scoped=enabled)
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)[name] == state
+        assert provider.read_calls == 0 and provider.calls == 0
+        assert not scheduler.events[name].is_set()
+        assert not scheduler.refresh_events[name].is_set()
+
+
+@pytest.mark.parametrize("enabled", [None, 0, 1, 0.0, 1.0, "false", [], {}])
+def test_show_scoped_setting_rejects_non_bool(enabled: object, settings_factory: Callable[..., Settings]) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeReader())
+    with pytest.raises(ValueError, match="^enabled must be bool$"):
+        scheduler.set_show_scoped("codex", enabled)
+    assert scheduler.states["codex"].show_scoped is True
+    assert not scheduler.path.exists()
+
+
+def test_show_scoped_setting_requires_reader(settings_factory: Callable[..., Settings]) -> None:
+    scheduler = make_scheduler(settings_factory(), FakeProvider())
+    with pytest.raises(RefreshUnsupported):
+        scheduler.set_show_scoped("claude", False)
+    assert not scheduler.path.exists()
 
 
 def test_refresh_capability_requires_callable_and_claude_is_unsupported(settings_factory: Callable[..., Settings]) -> None:
