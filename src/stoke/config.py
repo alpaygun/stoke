@@ -34,6 +34,7 @@ class Settings:
     tool_delays: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     access_team_domain: str = ""
     access_aud: str = ""
+    claude_cli_version: str = ""
 
     @property
     def access_enabled(self) -> bool:
@@ -161,6 +162,9 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         int(datetime.combine(parse_date(expiry, "STOKE_CLAUDE_TOKEN_EXPIRES"), time(), timezone).timestamp())
         if expiry else None
     )
+    cli_version = env.get("STOKE_CLAUDE_CLI_VERSION", "").strip()
+    if cli_version and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", cli_version, re.ASCII) is None:
+        raise ValueError("STOKE_CLAUDE_CLI_VERSION must be X.Y.Z")
     tools = _names(env.get("STOKE_TOOLS", "claude,codex"), "STOKE_TOOLS")
     access_team_domain, access_aud = _access_settings(
         env.get("STOKE_ACCESS_TEAM_DOMAIN", ""), env.get("STOKE_ACCESS_AUD", ""),
@@ -187,4 +191,5 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         tool_delays=_tool_delays(env.get("STOKE_TOOL_DELAYS", ""), tools),
         access_team_domain=access_team_domain,
         access_aud=access_aud,
+        claude_cli_version=cli_version,
     )

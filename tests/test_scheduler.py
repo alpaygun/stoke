@@ -1072,7 +1072,7 @@ def test_stop_cancels_inflight_refresh_and_clears_live_flag(periodic: bool, sett
         provider.read_release = asyncio.Event()
         scheduler = make_scheduler(settings_factory(), provider)
         if periodic:
-            scheduler.set_auto_refresh("codex", True, 300)
+            scheduler.set_auto_refresh("codex", True, 600)
             await scheduler.start()
             task = scheduler.refresh_tasks["codex"]
         else:

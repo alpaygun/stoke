@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
+from .models import AutoRefresh, READ_MODES, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -105,11 +105,11 @@ def _auto_refresh(value: Any) -> AutoRefresh:
     """Normalize legacy intervals, rounding half minutes up without losing state."""
     if not isinstance(value, dict):
         raise ValueError("invalid auto refresh")
-    enabled, seconds = value.get("enabled", False), value.get("seconds", 300)
+    enabled, seconds = value.get("enabled", False), value.get("seconds", 600)
     _bool(enabled)
     if type(seconds) is not int or not 60 <= seconds <= 86400:
         raise ValueError("invalid stored auto refresh interval")
-    return AutoRefresh(enabled, min(3600, max(60, ((seconds + 30) // 60) * 60)))
+    return AutoRefresh(enabled, min(3600, max(600, ((seconds + 30) // 60) * 60)))
 
 
 def _read_record(value: Any) -> ReadRecord | None:
@@ -182,6 +182,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
             limits_at = item.get("limits_at")
             closed_at = item.get("window_closed_at")
             hold_minutes = item.get("reset_hold_minutes", 30)
+            read_mode = item.get("read_mode")
             states[name] = ToolState(
                 name, default.label, _bool(item["auto_stoke"]), False,
                 _window(item["five_hour"]), _window(item["weekly"]), _record(item["last_stoke"]),
@@ -196,6 +197,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 manual_resets=_manual_resets(item.get("manual_resets", [])),
                 weekly_resets=_weekly_resets(item.get("weekly_resets", [])),
                 window_closed_at=closed_at if type(closed_at) is int else None,
+                read_mode=read_mode if isinstance(read_mode, str) and read_mode in READ_MODES else "direct",
                 reset_hold_minutes=min(300, max(0, hold_minutes)) if type(hold_minutes) is int else 30,
             )
         return states

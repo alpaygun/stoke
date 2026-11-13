@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, time as local_time, timedelta, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from zoneinfo import ZoneInfo
 from . import clock, store
 from .config import Settings, parse_date, parse_time
 from .cycles import CycleLog, CycleRecord
-from .models import AutoRefresh, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
+from .models import AutoRefresh, READ_MODES, MANUAL_RESET_TITLES, ManualReset, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
 from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
 
 logger = logging.getLogger(__name__)
@@ -161,12 +162,10 @@ def detect_weekly_reset(
 
 def _credit_used(previous: list[ResetCredit], current: list[ResetCredit], observed_at: int) -> bool:
     """Only a missing, unexpired credit counts as spent."""
-    available = {(credit.title, credit.granted_at, credit.expires_at) for credit in current}
-    return any(
-        credit.expires_at > observed_at
-        and (credit.title, credit.granted_at, credit.expires_at) not in available
-        for credit in previous
-    )
+    available = Counter((credit.title, credit.granted_at, credit.expires_at) for credit in current)
+    before = Counter((credit.title, credit.granted_at, credit.expires_at)
+                     for credit in previous if credit.expires_at > observed_at)
+    return any(count > available[key] for key, count in before.items())
 
 
 def compute_warning(state: ToolState) -> str | None:
@@ -319,13 +318,26 @@ class Scheduler:
             self._attempts.add(task)
         try:
             try:
-                snapshot = await self.readers[name].read_limits()
+                snapshot = await self.readers[name].read_limits(state.read_mode)
             except ProviderError as error:
                 signed_out = isinstance(error, ReaderSignedOut)
                 message = "usage reader signed out" if signed_out else short_error(str(error))
-                state.last_read = ReadRecord(clock.now(), False, message, signed_out)
+                now = clock.now()
+                if signed_out and (state.last_read is None or not state.last_read.signed_out):
+                    expiry = "unknown"
+                    try:
+                        read_expiry = getattr(self.readers[name], "read_login_expires_at", None)
+                        value = read_expiry() if callable(read_expiry) else None
+                        if type(value) is int and value > 0:
+                            expiry = datetime.fromtimestamp(value, timezone.utc).isoformat()
+                    except Exception:
+                        pass
+                    logger.warning("tool=%s usage reader signed out at %s; login refresh expiry %s",
+                                   name, datetime.fromtimestamp(now, timezone.utc).isoformat(), expiry)
+                state.last_read = ReadRecord(now, False, message, signed_out)
                 self._persist()
-                logger.warning("tool=%s refresh failed: %s", name, short_error(str(error)))
+                if not signed_out:
+                    logger.warning("tool=%s refresh failed: %s", name, short_error(str(error)))
                 raise
             except Exception as error:
                 state.last_read = ReadRecord(clock.now(), False, "unexpected provider error", False)
@@ -411,6 +423,17 @@ class Scheduler:
                 await asyncio.wait_for(event.wait(), delay)
             except TimeoutError:
                 pass
+
+    def set_read_mode(self, name: str, mode: str) -> ToolState:
+        """Persist the selected reading path without initiating a read."""
+        if name not in self.readers:
+            raise RefreshUnsupported(name)
+        if not isinstance(mode, str) or mode not in READ_MODES:
+            raise ValueError("mode must be direct or cli")
+        state = self.states[name]
+        state.read_mode = mode
+        self._persist()
+        return state
 
     def set_auto_refresh(self, name: str, enabled: bool, seconds: int) -> ToolState:
         """Persist per-tool reading preferences and restart its timer."""

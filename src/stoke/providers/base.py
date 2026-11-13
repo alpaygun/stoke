@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from datetime import datetime
 from typing import Any, Iterator, Protocol
 
 from ..models import LimitsSnapshot, StokeResult, Window
@@ -35,6 +36,27 @@ class ReaderSignedOut(ProviderError):
     """The separate browser login used for usage reads is no longer valid."""
 
 
+def iso_epoch(value: Any) -> int:
+    """Accept an offset-aware ISO timestamp with a nonnegative epoch."""
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        parsed = datetime.fromisoformat(value)
+        if parsed.utcoffset() is None or parsed.timestamp() < 0:
+            raise ValueError
+        return int(parsed.timestamp())
+    except (ValueError, OverflowError, OSError):
+        raise LimitsUnreadable("limits unreadable") from None
+
+
+def optional_iso_epoch(value: Any) -> int | None:
+    """Ignore malformed optional timestamps without losing usage data."""
+    try:
+        return iso_epoch(value)
+    except LimitsUnreadable:
+        return None
+
+
 class Provider(Protocol):
     """One tool's fixed stoke operation."""
 
@@ -48,12 +70,12 @@ class Provider(Protocol):
 
 
 class LimitReader(Protocol):
-    """Optional provider capability for no-stoke limit reads."""
+    """Optional no-stoke reader; may also expose read_login_expires_at() -> int | None."""
 
     name: str
     label: str
 
-    async def read_limits(self) -> LimitsSnapshot: ...
+    async def read_limits(self, mode: str = "direct") -> LimitsSnapshot: ...
 
 
 def json_objects(text: str) -> Iterator[dict[str, Any]]:

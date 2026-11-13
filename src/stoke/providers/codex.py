@@ -1,5 +1,6 @@
 """Codex stokes using device-auth credentials in the persistent CODEX_HOME."""
 
+import json
 import logging
 import os
 import re
@@ -7,9 +8,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import Settings
+from ..httpget import HttpGet, HttpGetError, http_get
+from ..version import stoke_version
 from ..models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window, sanitize_reset_title
 from ..runner import RpcError, RpcRunner, Runner, run_command, run_jsonrpc
-from .base import LimitsUnreadable, ProviderError, json_objects, parse_window, short_error
+from .base import LimitsUnreadable, ProviderError, json_objects, optional_iso_epoch, parse_window, short_error
 
 ARGV = ("codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "hi")
 DELETE_ARGV_PREFIX = ("codex", "delete", "--force")
@@ -130,12 +133,98 @@ class CodexProvider:
     reset_closes_window = True
     auth_labels = {"shared": {"label": "ChatGPT login"}}
 
-    def __init__(self, settings: Settings, runner: Runner = run_command, rpc: RpcRunner = run_jsonrpc) -> None:
+    def __init__(self, settings: Settings, runner: Runner = run_command, rpc: RpcRunner = run_jsonrpc, http: HttpGet = http_get) -> None:
         self.settings = settings
         self.runner = runner
         self.rpc = rpc
+        self.http = http
 
-    async def read_limits(self) -> LimitsSnapshot:
+    async def read_limits(self, mode: str = "direct") -> LimitsSnapshot:
+        """Read usage directly when the official CLI's login is available."""
+        if mode == "cli":
+            return await self._read_via_app_server()
+        try:
+            auth = json.loads((self.settings.codex_home / "auth.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, RecursionError):
+            return await self._read_via_app_server()
+        tokens = auth.get("tokens") if isinstance(auth, dict) else None
+        if not isinstance(tokens, dict):
+            return await self._read_via_app_server()
+        token, account = tokens.get("access_token"), tokens.get("account_id")
+        if not isinstance(token, str) or not token or not isinstance(account, str) or not account:
+            return await self._read_via_app_server()
+        version = stoke_version()
+        headers = {
+            "Authorization": f"Bearer {token}", "ChatGPT-Account-Id": account,
+            "Accept": "application/json", "User-Agent": f"stoke/{version}" if version else "stoke",
+        }
+        try:
+            response = await self.http("https://chatgpt.com/backend-api/wham/usage", headers,
+                                       min(self.settings.timeout_seconds, 30))
+        except HttpGetError as error:
+            raise ProviderError(f"Codex usage read failed: {error}") from None
+        if response.status == 401:
+            logger.info("tool=codex direct read got 401, using CLI")
+            return await self._read_via_app_server()
+        if response.status == 429:
+            raise ProviderError("Codex usage endpoint rate limited (HTTP 429)")
+        if response.status != 200:
+            raise ProviderError(f"Codex usage read failed (HTTP {response.status})")
+        try:
+            payload = json.loads(response.body)
+        except (ValueError, UnicodeError, RecursionError):
+            raise LimitsUnreadable("limits unreadable") from None
+        limits = payload.get("rate_limit") if isinstance(payload, dict) else None
+        if not isinstance(limits, dict):
+            raise LimitsUnreadable("limits unreadable")
+
+        def window(value: Any) -> Window:
+            if not isinstance(value, dict):
+                raise LimitsUnreadable("limits unreadable")
+            seconds = value.get("limit_window_seconds")
+            return parse_window({
+                "used_percent": value.get("used_percent"), "resets_at": value.get("reset_at"),
+                "window_minutes": seconds // 60 if type(seconds) is int and seconds > 0 else None,
+            })
+
+        five_hour = window(limits.get("primary_window"))
+        secondary = limits.get("secondary_window")
+        weekly = None if secondary is None else window(secondary)
+        resets = await self._read_direct_credits(headers)
+        return LimitsSnapshot(five_hour, weekly, resets)
+
+    async def _read_direct_credits(self, headers: Mapping[str, str]) -> ResetCredits | None:
+        """A credits failure must never discard a successful usage read."""
+        try:
+            response = await self.http("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+                                       headers, min(self.settings.timeout_seconds, 30))
+            if response.status != 200:
+                logger.warning("tool=codex reset credits read failed (HTTP %s)", response.status)
+                return None
+            block = json.loads(response.body)
+            if not isinstance(block, dict) or type(block.get("available_count")) is not int or block["available_count"] < 0:
+                logger.warning("tool=codex reset credits read failed: invalid data")
+                return None
+            credits = []
+            entries = block.get("credits")
+            for entry in entries if isinstance(entries, list) else []:
+                if not isinstance(entry, dict) or entry.get("status") != "available":
+                    continue
+                expires = optional_iso_epoch(entry.get("expires_at"))
+                if expires is None:
+                    continue
+                title = entry.get("title")
+                credits.append(ResetCredit(
+                    sanitize_reset_title(title if isinstance(title, str) else ""),
+                    optional_iso_epoch(entry.get("granted_at")), expires,
+                ))
+            credits.sort(key=lambda credit: credit.expires_at)
+            return ResetCredits(block["available_count"], credits, 0)
+        except (HttpGetError, ValueError, UnicodeError, RecursionError) as error:
+            logger.warning("tool=codex reset credits read failed: %s", type(error).__name__)
+            return None
+
+    async def _read_via_app_server(self) -> LimitsSnapshot:
         """Read official usage without creating a thread or spending a reset."""
         workdir = self.settings.data_dir / "workdir"
         workdir.mkdir(parents=True, exist_ok=True)

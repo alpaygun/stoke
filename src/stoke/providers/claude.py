@@ -1,13 +1,16 @@
 """Claude Code stokes authenticated by CLAUDE_CODE_OAUTH_TOKEN."""
 
+import json
 import logging
-from datetime import datetime
+from math import ceil
 from typing import Any
 
+from .. import clock
 from ..config import Settings
-from ..models import LimitsSnapshot, StokeResult, Window
+from ..httpget import HttpGet, HttpGetError, http_get
+from ..models import LimitsSnapshot, ResetCredit, ResetCredits, StokeResult, Window
 from ..runner import Runner, run_command
-from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, json_objects, parse_window
+from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, iso_epoch, json_objects, optional_iso_epoch, parse_window, short_error
 
 ARGV = (
     "claude", "-p", "hi", "--output-format", "stream-json", "--verbose",
@@ -20,26 +23,49 @@ READ_ARGV = (
 READ_STDIN = b'{"type":"control_request","request_id":"stoke-usage","request":{"subtype":"get_usage","skip_behaviors":true}}\n'
 logger = logging.getLogger(__name__)
 _credits_reported = False
+_version_warning_reported = False
+_ineligible_reported = False
 
 
-def _iso_epoch(value: Any) -> int:
-    """Accept an offset-aware ISO timestamp with a nonnegative epoch."""
-    try:
-        if not isinstance(value, str):
-            raise ValueError
-        parsed = datetime.fromisoformat(value)
-        if parsed.utcoffset() is None or parsed.timestamp() < 0:
-            raise ValueError
-        return int(parsed.timestamp())
-    except (ValueError, OverflowError, OSError):
-        raise LimitsUnreadable("limits unreadable") from None
+def _reset_credits(value: Any, now: int) -> ResetCredits | None:
+    global _ineligible_reported
+    if not isinstance(value, dict):
+        return None
+    if value.get("eligible") is not True:
+        if not _ineligible_reported:
+            _ineligible_reported = True
+            logger.warning("tool=claude reset credits not eligible (reason=%s); keeping previous list",
+                           short_error(str(value.get("ineligible_reason"))))
+        return None
+    credits = []
+    grants = value.get("grants")
+    for grant in grants if isinstance(grants, list) else []:
+        if not isinstance(grant, dict):
+            continue
+        count = grant.get("resets_left")
+        expires = optional_iso_epoch(grant.get("ends_at"))
+        if type(count) is not int or count < 1 or expires is None or expires <= now:
+            continue
+        clears = grant.get("clears")
+        title = "Other reset"
+        if isinstance(clears, list):
+            if "seven_day" in clears:
+                title = "Full reset"
+            elif "five_hour" in clears and "seven_day_overage_included" in clears:
+                title = "Fable reset"
+            elif clears and all(member == "five_hour" for member in clears):
+                title = "5-hour reset"
+        granted = optional_iso_epoch(grant.get("starts_at"))
+        credits.extend(ResetCredit(title, granted, expires) for _ in range(min(count, 20)))
+    credits.sort(key=lambda credit: credit.expires_at)
+    return ResetCredits(len(credits), credits, 0)
 
 
 def _usage_window(value: Any, minutes: int) -> Window:
     if not isinstance(value, dict):
         raise LimitsUnreadable("limits unreadable")
     return parse_window({
-        "used_percent": value.get("utilization"), "resets_at": _iso_epoch(value.get("resets_at")),
+        "used_percent": value.get("utilization"), "resets_at": iso_epoch(value.get("resets_at")),
         "window_minutes": minutes,
     })
 
@@ -71,11 +97,102 @@ class ClaudeProvider:
     reset_closes_window = False
     auth_labels = {"stoke": {"label": "1-year token"}, "read": {"label": "Browser login"}}
 
-    def __init__(self, settings: Settings, runner: Runner = run_command) -> None:
+    def __init__(self, settings: Settings, runner: Runner = run_command, http: HttpGet = http_get) -> None:
         self.settings = settings
         self.runner = runner
+        self.http = http
+        self._last_direct_at: int | None = None
+        self._login_file_key: tuple[int, int] | None = None
+        self._login_expires_at: int | None = None
 
-    async def read_limits(self) -> LimitsSnapshot:
+    def read_login_expires_at(self) -> int | None:
+        """Cache only file metadata and expiry, never credentials or tokens."""
+        path = self.settings.claude_reader_dir / ".credentials.json"
+        try:
+            stat = path.stat()
+            key = (stat.st_mtime_ns, stat.st_size)
+            if key == self._login_file_key:
+                return self._login_expires_at
+            self._login_expires_at = None
+            self._login_file_key = key
+        except OSError:
+            self._login_file_key = None
+            self._login_expires_at = None
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            oauth = value.get("claudeAiOauth") if isinstance(value, dict) else None
+            expires = oauth.get("refreshTokenExpiresAt") if isinstance(oauth, dict) else None
+            if type(expires) is int and expires > 0:
+                self._login_expires_at = expires // 1000
+        except (OSError, UnicodeError, ValueError, RecursionError):
+            pass
+        return self._login_expires_at
+
+    async def read_limits(self, mode: str = "direct") -> LimitsSnapshot:
+        """Prefer the read-only usage endpoint; leave login refresh to the CLI."""
+        global _version_warning_reported
+        if mode == "cli":
+            return await self._read_via_cli()
+        if not self.settings.claude_cli_version:
+            if not _version_warning_reported:
+                _version_warning_reported = True
+                logger.warning("direct Claude read needs STOKE_CLAUDE_CLI_VERSION; using CLI")
+            return await self._read_via_cli()
+        try:
+            value = json.loads((self.settings.claude_reader_dir / ".credentials.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ReaderSignedOut("usage reader signed out") from None
+        except (OSError, UnicodeError, ValueError, RecursionError):
+            return await self._read_via_cli()
+        oauth = value.get("claudeAiOauth") if isinstance(value, dict) else None
+        if not isinstance(oauth, dict):
+            return await self._read_via_cli()
+        token = oauth.get("accessToken")
+        if not isinstance(token, str) or not token:
+            raise ReaderSignedOut("usage reader signed out")
+        now = clock.now()
+        expires = oauth.get("expiresAt")
+        if type(expires) is int and expires <= (now + 60) * 1000:
+            logger.info("tool=claude direct read: access token expired, using CLI")
+            return await self._read_via_cli()
+        if self._last_direct_at is not None and now - self._last_direct_at < 600:
+            minutes = max(1, ceil((600 - (now - self._last_direct_at)) / 60))
+            raise ProviderError(f"Claude usage was read less than 10 minutes ago; try again in {minutes} min")
+        headers = {
+            "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
+            "User-Agent": f"claude-cli/{self.settings.claude_cli_version} (external, cli)",
+        }
+        self._last_direct_at = now
+        try:
+            response = await self.http("https://api.anthropic.com/api/oauth/usage?cedar_ember=1",
+                                       headers, min(self.settings.timeout_seconds, 30))
+        except HttpGetError as error:
+            raise ProviderError(f"Claude usage read failed: {error}") from None
+        if response.status == 401:
+            logger.info("tool=claude direct read got 401, using CLI")
+            return await self._read_via_cli()
+        if response.status == 429:
+            raise ProviderError("Claude usage endpoint rate limited (HTTP 429)")
+        if response.status != 200:
+            raise ProviderError(f"Claude usage read failed (HTTP {response.status})")
+        try:
+            limits = json.loads(response.body)
+        except (ValueError, UnicodeError, RecursionError):
+            raise LimitsUnreadable("limits unreadable") from None
+        if not isinstance(limits, dict):
+            raise LimitsUnreadable("limits unreadable")
+        weekly = limits.get("seven_day")
+        breakdown = limits.get("seven_day_breakdown")
+        observed = optional_iso_epoch(breakdown.get("as_of")) if isinstance(breakdown, dict) else None
+        return LimitsSnapshot(
+            _usage_window(limits.get("five_hour"), 300),
+            None if weekly is None else _usage_window(weekly, 10080),
+            _reset_credits(limits.get("cedar_ember"), clock.now()), observed,
+        )
+
+    async def _read_via_cli(self) -> LimitsSnapshot:
         """Read usage through the official CLI with an isolated browser login."""
         global _credits_reported
         workdir = self.settings.data_dir / "workdir"
@@ -116,7 +233,7 @@ class ClaudeProvider:
         breakdown = limits.get("seven_day_breakdown")
         if isinstance(breakdown, dict):
             try:
-                observed = _iso_epoch(breakdown.get("as_of"))
+                observed = iso_epoch(breakdown.get("as_of"))
             except LimitsUnreadable:
                 pass
         weekly = limits.get("seven_day")

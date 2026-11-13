@@ -399,7 +399,7 @@ def test_new_state_roundtrip_and_v051_compatibility(name: str, settings_factory:
     state.plan = Plan("07:00", "daily", True, 9000, None)
     state.plan_outcome = PlanOutcome(1000, "missed", 1100)
     state.resets = ResetCredits(1, [ResetCredit("Full reset", 1000, 20000)], 1200)
-    state.auto_refresh = AutoRefresh(True, 120)
+    state.auto_refresh = AutoRefresh(True, 600)
     state.last_read = ReadRecord(1000, False, "usage reader signed out", True)
     state.manual_resets = [ManualReset("abcdef012345", "Full reset", 5000, 1000)]
     save(scheduler.path, scheduler.states)
@@ -416,8 +416,8 @@ def test_new_state_roundtrip_and_v051_compatibility(name: str, settings_factory:
 
 
 @pytest.mark.parametrize("enabled,seconds,expected", [
-    (True, 7200, 3600), (False, 90, 120), (True, 86400, 3600),
-    (True, 89, 60), (False, 91, 120), (True, 60, 60),
+    (True, 7200, 3600), (False, 90, 600), (True, 86400, 3600),
+    (True, 89, 600), (False, 91, 600), (True, 60, 600),
 ])
 def test_legacy_auto_refresh_normalizes_without_losing_state(
     enabled: bool, seconds: int, expected: int, settings_factory: Callable[..., Settings],
@@ -526,17 +526,17 @@ def test_refresh_loop_opt_in_interval_change_disable_and_independence(settings_f
         try:
             await asyncio.sleep(0)
             assert provider.read_calls == 0 and waits.empty()
-            scheduler.set_auto_refresh("codex", True, 300)
+            scheduler.set_auto_refresh("codex", True, 900)
             seconds, gate = await original(waits.get(), 0.5)
-            assert seconds == 300 and provider.read_calls == 1
+            assert seconds == 900 and provider.read_calls == 1
             gate.set_exception(TimeoutError())
             seconds, gate = await original(waits.get(), 0.5)
-            assert seconds == 300 and provider.read_calls == 2
-            scheduler.set_auto_refresh("codex", True, 120)
+            assert seconds == 900 and provider.read_calls == 2
+            scheduler.set_auto_refresh("codex", True, 600)
             gate.set_result(True)
             seconds, gate = await original(waits.get(), 0.5)
-            assert seconds == 120 and provider.read_calls == 3
-            scheduler.set_auto_refresh("codex", False, 120)
+            assert seconds == 600 and provider.read_calls == 3
+            scheduler.set_auto_refresh("codex", False, 600)
             gate.set_result(True)
             await asyncio.sleep(0)
             assert provider.read_calls == 3 and waits.empty()
@@ -567,14 +567,14 @@ def test_refresh_loop_backoff_cap_reset_and_busy(failure: Exception, settings_fa
             return await future
         monkeypatch.setattr(scheduler, "refresh_limits", read)
         monkeypatch.setattr("stoke.scheduler.asyncio.wait_for", wait_for)
-        scheduler.set_auto_refresh("codex", True, 60)
+        scheduler.set_auto_refresh("codex", True, 600)
         await scheduler.start()
         try:
-            for index, expected in enumerate([120, 240, 480, 960, 1920, 3600, 3600, 3600, 60, 10, 60]):
+            for index, expected in enumerate([1200, 2400, 3600, 3600, 3600, 3600, 3600, 3600, 600, 10, 600]):
                 seconds, gate = await original(waits.get(), 0.5)
                 assert seconds == expected
                 if index == 0:
-                    scheduler.set_auto_refresh("codex", True, 60)
+                    scheduler.set_auto_refresh("codex", True, 600)
                     gate.set_result(True)
                 elif index < 10:
                     gate.set_exception(TimeoutError())
@@ -594,13 +594,13 @@ def test_refresh_setting_wakes_actual_wait_and_survives_change_during_read(setti
         await scheduler.start()
         try:
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
-            scheduler.set_auto_refresh("codex", True, 120)
+            scheduler.set_auto_refresh("codex", True, 600)
             provider.read_started.clear()
             provider.read_release.set()
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
             assert provider.read_calls == 2
             provider.read_started.clear()
-            scheduler.set_auto_refresh("codex", True, 180)
+            scheduler.set_auto_refresh("codex", True, 1200)
             await asyncio.wait_for(provider.read_started.wait(), 0.5)
             assert provider.read_calls == 3
         finally:
@@ -623,17 +623,17 @@ def test_refresh_events_are_per_tool_and_busy_start_retries(settings_factory: Ca
                 waits.put_nowait(timeout)
             return await original(awaitable, timeout)
         monkeypatch.setattr("stoke.scheduler.asyncio.wait_for", wait_for)
-        scheduler.set_auto_refresh("codex", True, 300)
+        scheduler.set_auto_refresh("codex", True, 900)
         await scheduler.start()
         try:
             assert await original(waits.get(), 0.5) == 10
             assert codex.read_calls == claude.read_calls == 0
             codex.release.set()
             await asyncio.sleep(0)
-            scheduler.set_auto_refresh("codex", True, 120)
-            assert await original(waits.get(), 0.5) == 120
+            scheduler.set_auto_refresh("codex", True, 600)
+            assert await original(waits.get(), 0.5) == 600
             assert codex.read_calls == 1 and claude.read_calls == 0
-            scheduler.set_auto_refresh("claude", True, 60)
+            scheduler.set_auto_refresh("claude", True, 600)
             await original(claude.read_started.wait(), 0.5)
             assert claude.read_calls == 1 and codex.read_calls == 1
         finally:
@@ -767,7 +767,7 @@ def test_live_warning_priority_expiry_boundary_and_auth(delta: int, warning: str
     def live() -> dict[str, Any]:
         return serialize_tool(state, 1000, settings=settings, manual_resets_allowed=True, auth_labels=ClaudeProvider.auth_labels)
     assert live()["warning"] == warning and state.warning is None
-    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Browser login"}}
+    assert live()["auth"] == {"stoke": {"label": "1-year token", "expires_at": 1000 + delta}, "read": {"label": "Browser login", "expires_at": None}}
     assert live()["manual_resets_allowed"]
     state.last_read = ReadRecord(900, False, "usage reader signed out", True)
     assert live()["warning"] == "read_signed_out" and state.warning is None
@@ -790,7 +790,7 @@ def test_dry_run_preserves_both_capabilities_and_auth(settings_factory: Callable
     async def no_wait(seconds: float) -> None:
         pass
     providers["claude"].sleep = no_wait
-    assert asyncio.run(providers["claude"].read_limits()).resets is None
+    assert asyncio.run(providers["claude"].read_limits("cli")).resets is None
 
 
 def test_api_new_endpoints_and_live_fields(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> None:

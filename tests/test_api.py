@@ -379,14 +379,14 @@ def test_state_shape_manual_result_health_and_page(
             "window_open": False, "five_hour": None, "weekly": None, "last_stoke": None,
             "next_stoke_at": None, "consecutive_failures": 0, "warning": None,
             "limits_at": None, "stale_resets": 0,
-            "window_closed_at": None, "reset_hold_minutes": 30,
+            "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct",
             "refreshable": False, "refreshing": False, "resets": None,
             "reset_closes_window": False, "delay_seconds": 90,
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
-            "auto_refresh": {"enabled": False, "seconds": 300}, "last_read": None,
+            "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None,
             "manual_resets": [], "manual_resets_allowed": True, "weekly_resets": [],
-            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Browser login"}},
+            "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Browser login", "expires_at": None}},
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
         assert result["five_hour"] == {"used_percent": 2.0, "resets_at": 19000, "window_minutes": 300}

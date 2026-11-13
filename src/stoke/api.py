@@ -67,12 +67,14 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             raise HTTPException(404, "unknown tool")
 
     def serialize(state: ToolState, now: int | None = None) -> dict[str, Any]:
+        read_expiry = getattr(scheduler.providers[state.name], "read_login_expires_at", None)
         return serialize_tool(
             state, clock.now() if now is None else now,
             refreshable=scheduler.can_refresh(state.name), settings=settings,
             manual_resets_allowed=scheduler.providers[state.name].manual_resets,
             auth_labels=scheduler.providers[state.name].auth_labels,
             reset_closes_window=scheduler.reset_closes_window[state.name],
+            read_login_expires=read_expiry() if callable(read_expiry) else None,
         )
 
     @app.get("/api/state")
@@ -178,6 +180,20 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             if not isinstance(body, dict) or set(body) != {"id"} or not isinstance(body["id"], str):
                 raise ValueError("body must contain exactly id: str")
             state = scheduler.dismiss_weekly_reset(name, body["id"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/read-mode")
+    async def set_read_mode(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        if not scheduler.can_refresh(name):
+            raise HTTPException(404, "refresh not supported")
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"mode"}:
+                raise ValueError("body must contain exactly mode: str")
+            state = scheduler.set_read_mode(name, body["mode"])
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         return serialize(state)

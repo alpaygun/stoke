@@ -9,6 +9,8 @@ from .config import parse_time
 if TYPE_CHECKING:
     from .config import Settings
 
+READ_MODES = ("direct", "cli")
+
 PlanRepeat = Literal["once", "daily"]
 PlanResult = Literal["done", "missed", "broken"]
 
@@ -111,15 +113,15 @@ class AutoRefresh:
     """Persisted opt-in usage reading and its interval."""
 
     enabled: bool = False
-    seconds: int = 300
+    seconds: int = 600
 
 
 def validate_auto_refresh(enabled: bool, seconds: int) -> None:
-    """Require a strict boolean and whole-minute intervals from 1 to 60 minutes."""
+    """Require a strict boolean and whole-minute intervals from 10 to 60 minutes."""
     if type(enabled) is not bool:
         raise ValueError("enabled must be bool")
-    if type(seconds) is not int or not 60 <= seconds <= 3600 or seconds % 60 != 0:
-        raise ValueError("seconds must be an integer multiple of 60 between 60 and 3600")
+    if type(seconds) is not int or not 600 <= seconds <= 3600 or seconds % 60 != 0:
+        raise ValueError("seconds must be an integer multiple of 60 between 600 and 3600")
 
 
 @dataclass
@@ -187,6 +189,7 @@ class ToolState:
     weekly_resets: list[WeeklyReset] = field(default_factory=list)
     window_closed_at: int | None = None
     reset_hold_minutes: int = 30
+    read_mode: str = "direct"
 
 
 def serialize_tool(
@@ -194,6 +197,7 @@ def serialize_tool(
     *, settings: "Settings | None" = None, manual_resets_allowed: bool = False,
     auth_labels: dict[str, dict[str, str]] | None = None,
     reset_closes_window: bool = True,
+    read_login_expires: int | None = None,
 ) -> dict[str, Any]:
     """Serialize persisted fields, adding live fields only for API responses."""
     data = asdict(state)
@@ -218,6 +222,8 @@ def serialize_tool(
         expires = settings.claude_token_expires if state.name == "claude" else None
         if state.name == "claude" and "stoke" in data["auth"]:
             data["auth"]["stoke"]["expires_at"] = expires
+        if "read" in data["auth"]:
+            data["auth"]["read"]["expires_at"] = read_login_expires
         if state.warning is None:
             if state.last_read is not None and state.last_read.signed_out:
                 data["warning"] = "read_signed_out"

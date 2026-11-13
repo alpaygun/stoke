@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --create-home --uid 1000 stoke \
     && mkdir -p /data/workdir /home/stoke/.codex \
     && chown -R stoke:stoke /data /home/stoke
+COPY pyproject.toml ./
 COPY src ./src
 COPY static ./static
 COPY --chmod=0755 scripts/stoke-login /usr/local/bin/stoke-login
@@ -27,6 +28,7 @@ COPY --chmod=0755 scripts/stoke-login /usr/local/bin/stoke-login
 ENV HOME=/home/stoke \
     CODEX_HOME=/home/stoke/.codex \
     DISABLE_AUTOUPDATER=1 \
+    STOKE_CLAUDE_CLI_VERSION=$CLAUDE_CODE_VERSION \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src
 USER stoke

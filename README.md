@@ -22,10 +22,10 @@ Stoke sends one tiny message (`hi`) through the official CLI the moment a window
 |---|---|
 | **Automatic stokes** | One loop per tool: stoke, read the window's end time from the CLI's own output, wait until it ends (+90 s), repeat. Failures back off (1, 5, 15, 30, 60 min). |
 | **Panel** | One card per tool: time left in the window, 5-hour and weekly usage, last and next stoke, limit resets. Auto-stoke switch in **Settings** and **Stoke now** button per tool. Light and dark theme. |
-| **Usage without a message** | **Refresh usage** reads current usage without starting a window (Codex through `codex app-server`, Claude through a separate sign-in). Optional automatic refresh per tool (Settings). |
+| **Usage without a message** | **Refresh usage** reads current usage without starting a window (direct read-only GET first, official CLI as fallback; Claude uses a separate sign-in). Optional automatic refresh per tool (Settings, 10–60 minutes). |
 | **Plans** | Start a tool's window at a chosen local time, once or every day. Automatic stokes pause in the 5 hours before that time so an earlier window does not run into it. |
 | **Window offset** | With both tools on, the header shows the gap between their windows and suggests one-click plans that move them 2.5 h apart, so one of them always resets soon. |
-| **Limit resets** | Codex reset credits are read and listed with their expiry. Claude's cannot be read; you can enter them by hand as a reminder. Stoke never spends a credit. |
+| **Limit resets** | Claude and Codex reset credits are read with their expiry. Claude also keeps manual reminders. Stoke never spends a credit. |
 | **Early weekly resets** | When a provider resets the weekly limit early, the panel shows a note and keeps the history (Info). |
 | **Early window resets** | For tools whose resets restart the window (Codex), a threshold chooses an immediate stoke or a wait to preserve the offset. Claude resets only usage and keeps its schedule. |
 | **Warnings** | A short line above the cards when something needs attention; see [Warnings](#warnings). |
@@ -128,7 +128,7 @@ Every `POST` request needs the `X-Stoke: 1` header, so another website cannot tr
 
 - **Settings** (sliders icon) and **Info** (info icon) are buttons in each card's header.
 - The **Auto-stoke** switch in the card's **Settings** switches the loop on or off for that tool. **Stoke now** sends a stoke immediately.
-- **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (1 to 60 whole minutes).
+- **Refresh usage** reads usage without sending a message. **Settings** turns automatic refresh on (10 to 60 whole minutes). The API switch `POST /api/tools/{name}/read-mode` accepts `{"mode":"direct"}` (default) or `{"mode":"cli"}`. Direct Claude GETs are at least 10 minutes apart.
 - Each tool accepts at most 6 **Stoke now** and 30 **Refresh usage** requests per rolling hour; more are refused (HTTP 429) with the time a slot frees up. Automatic stokes, plans and automatic refresh do not count. The counters live in memory and start over on restart.
 - **After an early reset** in **Settings** applies to tools whose resets restart the window (Codex): wait near the old end to preserve the offset (0–300 minutes, default 30; 0 stokes at once when auto-stoke is on). Claude resets only usage and keeps its schedule.
 - **Info** shows the full text of a warning, the plan with its quiet hours and last result, the newest three weekly resets and the sign-in state. **Show all** opens the full reset history, six per page.
@@ -184,8 +184,8 @@ This removes the container and the Codex sign-in volume. Then delete the folder,
 <summary><strong>How it works</strong></summary>
 
 - One Python process (FastAPI + uvicorn) runs one asyncio loop per tool and serves the panel and a small JSON API. State is a single file, `data/state.json`; there is no database.
-- Claude: `claude -p` with the stoke token; the window end comes from the `rate_limit_event` in its `stream-json` output. Usage reads send a `get_usage` control request through the CLI, signed in separately.
-- Codex: `codex exec`; the window end comes from the session file the CLI writes. After each stoke the session is removed with the official `codex delete` command, so no history accumulates. Usage and reset credits come from `codex app-server` (`account/rateLimits/read`); the method that spends a credit is never called.
+- Claude: `claude -p` with the stoke token; the window end comes from the `rate_limit_event` in its `stream-json` output. Usage and reset credits use a direct read-only GET with a separate browser login; `get_usage` through the official CLI is the fallback.
+- Codex: `codex exec`; the window end comes from the session file the CLI writes. After each stoke the session is removed with the official `codex delete` command, so no history accumulates. Usage and reset credits use direct read-only GETs, with `codex app-server` (`account/rateLimits/read`) as fallback; credits are never spent.
 - After a successful stoke the next one is scheduled for the window end + `STOKE_DELAY_SECONDS` (90), with optional per-tool overrides in `STOKE_TOOL_DELAYS` (e.g. `codex=10`). On restart, a window that is still running is not stoked again.
 - Error messages are cut short and token-like strings are removed before they are stored or shown.
 

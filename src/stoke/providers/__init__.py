@@ -34,7 +34,8 @@ def create_providers(settings: Settings, runner: Runner = run_command) -> dict[s
         dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
         providers[name] = (
             dry_factory(name, label, settings, manual_resets=factory.manual_resets,
-                        reset_closes_window=factory.reset_closes_window, auth_labels=factory.auth_labels)
+                        reset_closes_window=factory.reset_closes_window, auth_labels=factory.auth_labels,
+                        read_login_expiry=hasattr(factory, "read_login_expires_at"))
             if settings.dry_run else factory(settings, runner)
         )
     return providers

@@ -48,11 +48,13 @@ class FakeReader(FakeProvider):
             ResetCredits(1, [ResetCredit("Full reset", 10, 700000)], 0),
         )
         self.read_calls = 0
+        self.read_modes: list[str] = []
         self.read_started = asyncio.Event()
         self.read_release: asyncio.Event | None = None
 
-    async def read_limits(self) -> LimitsSnapshot:
+    async def read_limits(self, mode: str = "direct") -> LimitsSnapshot:
         self.read_calls += 1
+        self.read_modes.append(mode)
         self.read_started.set()
         if self.read_release is not None:
             await self.read_release.wait()
