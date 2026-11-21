@@ -12,7 +12,7 @@ from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings
 from stoke.cycles import CYCLE_RETENTION_SECONDS, CycleRecord
-from stoke.models import ResetCredit, ResetCredits, Window, serialize_tool
+from stoke.models import ResetCredit, ResetCredits, ScopedLimit, Window, serialize_tool
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import Scheduler
 from stoke.store import load, save
@@ -510,6 +510,63 @@ def test_state_filters_expired_stored_credits_for_all_tools(
             assert response.json()["tools"][name]["resets"]["available"] == available
     assert scheduler.states == states
     assert load(path, settings, providers) == states
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_live_serialization_filters_expired_scoped_limits_without_mutating_state(
+    name: str, settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.scoped_limits = [
+        ScopedLimit("Expired model", 12, 999), ScopedLimit("Future model", 34, 1001),
+        ScopedLimit("Boundary model", 56, 1000), ScopedLimit("Undated model", 78, None),
+        ScopedLimit("Epoch model", 90, 0),
+    ]
+    before = deepcopy(state)
+
+    assert serialize_tool(state, now=1000, settings=settings)["scoped_limits"] == [
+        {"label": "Future model", "used_percent": 34, "resets_at": 1001},
+        {"label": "Undated model", "used_percent": 78, "resets_at": None},
+    ]
+    assert state == before
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_persisted_serialization_keeps_expired_scoped_limits(name: str, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.scoped_limits = [ScopedLimit("Expired model", 12, 999), ScopedLimit("Epoch model", 34, 0)]
+
+    assert serialize_tool(state)["scoped_limits"] == [
+        {"label": "Expired model", "used_percent": 12, "resets_at": 999},
+        {"label": "Epoch model", "used_percent": 34, "resets_at": 0},
+    ]
+
+
+def test_state_filters_expired_stored_scoped_limits(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    scheduler.states["claude"].scoped_limits = [
+        ScopedLimit("Expired model", 12, 999), ScopedLimit("Boundary model", 34, 1000),
+        ScopedLimit("Future model", 56, 1001), ScopedLimit("Undated model", 78, None),
+    ]
+    before = deepcopy(scheduler.states)
+    save(scheduler.path, scheduler.states)
+    scheduler.states = load(scheduler.path, settings, scheduler.providers)
+
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        assert response.json()["tools"]["claude"]["scoped_limits"] == [
+            {"label": "Future model", "used_percent": 56, "resets_at": 1001},
+            {"label": "Undated model", "used_percent": 78, "resets_at": None},
+        ]
+    assert scheduler.states == before
+    assert load(scheduler.path, settings, scheduler.providers) == before
 
 
 def test_state_shape_manual_result_health_and_page(
