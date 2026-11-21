@@ -277,9 +277,11 @@ def test_scoped_limits_and_plan_heading_without_product_shares() -> None:
     assert "show_scoped: tool.show_scoped ?? true" in PAGE
     assert "planName: tool.plan_name ?? null" in PAGE
     assert "if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit =>" in PAGE
+    label_track = PAGE.index("group.append(label, track);", PAGE.index("function dialUsage"))
+    scoped_loop = PAGE.index("tool.scoped.forEach", label_track)
     scoped = PAGE.index("`Weekly · ${limit.label}`")
     weekly_end = PAGE.index("if (weekly) group.append(text('span', 'weekly-reset'")
-    assert scoped < weekly_end
+    assert label_track < weekly_end < scoped_loop < scoped
     assert "Math.abs(limit.resets_at - tool.weeklyAt) > 3600" in PAGE
     assert "`resets ${when(limit.resets_at, now())}`" in PAGE
     history = PAGE.index("'Weekly resets'", PAGE.index("function infoContent"))

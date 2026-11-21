@@ -16,7 +16,7 @@ import pytest
 from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings, load_settings
-from stoke.models import AutoRefresh, LimitsSnapshot, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, StokeRecord, Window, serialize_tool, validate_plan
+from stoke.models import AutoRefresh, LimitsSnapshot, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, Window, serialize_tool, validate_plan
 from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut
 from stoke.providers.claude import ClaudeProvider
@@ -57,6 +57,263 @@ def scheduler_for(settings: Settings, provider: FakeProvider | None = None) -> S
     actual = provider if provider is not None else FakeReader()
     providers = {actual.name: actual}
     return Scheduler(providers, load(settings.data_dir / "state.json", settings, providers), settings)
+
+
+@pytest.fixture
+def direct_retry_scheduler(settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch) -> Scheduler:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeReader("claude")
+    assert isinstance(provider.read_result, LimitsSnapshot)
+    provider.read_result = replace(provider.read_result, resets=None, direct_retry=True)
+    return scheduler_for(settings_factory(), provider)
+
+
+@pytest.fixture
+def direct_retry_delays(monkeypatch: pytest.MonkeyPatch) -> asyncio.Queue[tuple[float, asyncio.Future[None]]]:
+    """Expose follow-up sleeps as gates without changing other async tasks."""
+    waits: asyncio.Queue[tuple[float, asyncio.Future[None]]] = asyncio.Queue()
+    original_sleep = asyncio.sleep
+
+    async def sleep(seconds: float) -> None:
+        task = asyncio.current_task()
+        if task is not None and task.get_name().startswith("direct-retry:"):
+            gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            waits.put_nowait((seconds, gate))
+            await gate
+        else:
+            await original_sleep(seconds)
+
+    monkeypatch.setattr("stoke.scheduler.asyncio.sleep", sleep)
+    return waits
+
+
+@pytest.mark.parametrize("retry_again", [False, True])
+def test_direct_retry_runs_once_without_chaining(
+    retry_again: bool, direct_retry_scheduler: Scheduler,
+    direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="stoke.scheduler")
+
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        provider = scheduler.providers["claude"]
+        await scheduler.refresh_limits("claude")
+        task = scheduler._direct_retries["claude"]
+        seconds, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        assert seconds == 610 and provider.read_calls == 1
+        assert scheduler._attempts == {task}
+        provider.read_result = replace(
+            provider.read_result, direct_retry=retry_again,
+            resets=ResetCredits(1, [ResetCredit("Full reset", 10, 700000)], 0),
+            scoped=[ScopedLimit("Fable", 23, 600000)], plan_name="Pro",
+        )
+        monkeypatch.setattr("stoke.clock.now", lambda: 1610)
+        gate.set_result(None)
+        await asyncio.wait_for(task, 1)
+        assert provider.read_calls == 2 and provider.read_modes == ["direct", "direct"]
+        assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
+        state = scheduler.states["claude"]
+        assert state.resets == replace(provider.read_result.resets, read_at=1610)
+        assert state.scoped_limits == provider.read_result.scoped and state.plan_name == "Pro"
+        assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
+        assert "direct_retry" not in scheduler.path.read_text(encoding="utf-8")
+
+    asyncio.run(scenario())
+    assert caplog.messages.count("tool=claude direct read follow-up in 610 s") == 1
+
+
+@pytest.mark.parametrize("enabled, mode, retry", [(True, "direct", True), (False, "cli", True), (False, "direct", False)])
+def test_direct_retry_not_scheduled_when_unnecessary(
+    enabled: bool, mode: str, retry: bool, direct_retry_scheduler: Scheduler,
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        provider = scheduler.providers["claude"]
+        provider.read_result = replace(provider.read_result, direct_retry=retry)
+        scheduler.set_read_mode("claude", mode)
+        scheduler.set_auto_refresh("claude", enabled, 600)
+        await scheduler.refresh_limits("claude")
+        assert provider.read_calls == 1 and provider.read_modes == [mode]
+        assert not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("busy", [False, True])
+@pytest.mark.parametrize("change", ["read_mode", "auto_refresh", "another_read", "missing_last_read"])
+def test_direct_retry_skips_superseded_reads_before_every_attempt(
+    busy: bool, change: str, direct_retry_scheduler: Scheduler,
+    direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="stoke.scheduler")
+
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        provider = scheduler.providers["claude"]
+        await scheduler.refresh_limits("claude")
+        state = scheduler.states["claude"]
+        task = scheduler._direct_retries["claude"]
+        seconds, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        assert seconds == 610
+        if busy:
+            state.running = True
+            gate.set_result(None)
+            seconds, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+            assert seconds == 10
+            state.running = False
+        if change == "read_mode":
+            scheduler.set_read_mode("claude", "cli")
+        elif change == "auto_refresh":
+            scheduler.set_auto_refresh("claude", True, 600)
+        elif change == "another_read":
+            provider.read_result = replace(provider.read_result, direct_retry=False)
+            monkeypatch.setattr("stoke.clock.now", lambda: 1001)
+            await scheduler.refresh_limits("claude")
+        else:
+            state.last_read = None
+        before = deepcopy(state.last_read)
+        gate.set_result(None)
+        await asyncio.wait_for(task, 1)
+        assert provider.read_calls == (2 if change == "another_read" else 1)
+        assert state.last_read == before
+        assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+    assert "tool=claude direct read follow-up skipped: settings or last read changed" in caplog.messages
+
+
+@pytest.mark.parametrize("busy_attempts", [1, 2, 3])
+def test_direct_retry_retries_busy_tool_at_most_three_times(
+    busy_attempts: int, direct_retry_scheduler: Scheduler,
+    direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        provider = scheduler.providers["claude"]
+        await scheduler.refresh_limits("claude")
+        state = scheduler.states["claude"]
+        task = scheduler._direct_retries["claude"]
+        state.running = True
+        original_refresh = scheduler.refresh_limits
+        calls: list[bool] = []
+
+        async def refresh(name: str, *, follow_up: bool = False) -> ToolState:
+            calls.append(follow_up)
+            return await original_refresh(name, follow_up=follow_up)
+
+        monkeypatch.setattr(scheduler, "refresh_limits", refresh)
+        seconds, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        assert seconds == 610
+        gate.set_result(None)
+        for attempt in range(min(busy_attempts, 2)):
+            seconds, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+            assert seconds == 10 and calls == [True] * (attempt + 1)
+            if attempt + 1 == busy_attempts:
+                state.running = False
+            gate.set_result(None)
+        await asyncio.wait_for(task, 1)
+        assert calls == [True] * min(busy_attempts + 1, 3)
+        assert provider.read_calls == (1 if busy_attempts == 3 else 2)
+        assert state.last_read == ReadRecord(1000, True, None, False)
+        assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+
+
+def test_direct_retry_scheduling_twice_replaces_pending_task(
+    direct_retry_scheduler: Scheduler, direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        await scheduler.refresh_limits("claude")
+        first = scheduler._direct_retries["claude"]
+        _, first_gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        monkeypatch.setattr("stoke.clock.now", lambda: 1001)
+        await scheduler.refresh_limits("claude")
+        second = scheduler._direct_retries["claude"]
+        _, second_gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        await asyncio.gather(first, return_exceptions=True)
+        assert first is not second and first.cancelled() and first_gate.cancelled()
+        assert scheduler._attempts == {second} and scheduler._direct_retries == {"claude": second}
+        second_gate.set_result(None)
+        await asyncio.wait_for(second, 1)
+        assert scheduler.providers["claude"].read_calls == 3
+        assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("sleeping", [False, True])
+def test_direct_retry_stop_cancels_pending_follow_up(
+    sleeping: bool, direct_retry_scheduler: Scheduler,
+    direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]],
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        await scheduler.start()
+        await scheduler.refresh_limits("claude")
+        task = scheduler._direct_retries["claude"]
+        if sleeping:
+            _, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        await scheduler.stop()
+        assert task.cancelled()
+        if sleeping:
+            assert gate.cancelled()
+        await asyncio.sleep(0)
+        assert scheduler.providers["claude"].read_calls == 1
+        assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", [ProviderError("failed"), RuntimeError("private text")])
+def test_direct_retry_swallows_provider_failures_and_preserves_read_record(
+    failure: Exception, direct_retry_scheduler: Scheduler,
+    direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]], caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        provider = scheduler.providers["claude"]
+        await scheduler.refresh_limits("claude")
+        task = scheduler._direct_retries["claude"]
+        _, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+        provider.read_result = failure
+        gate.set_result(None)
+        await asyncio.wait_for(task, 1)
+        error = "failed" if isinstance(failure, ProviderError) else "unexpected provider error"
+        assert scheduler.states["claude"].last_read == ReadRecord(1000, False, error, False)
+        assert provider.read_calls == 2 and not scheduler._attempts and not scheduler._direct_retries
+        assert load(scheduler.path, scheduler.settings, scheduler.providers) == scheduler.states
+
+    asyncio.run(scenario())
+    assert "private text" not in caplog.text
+
+
+def test_direct_retry_swallows_unexpected_errors_without_logging_details(
+    direct_retry_scheduler: Scheduler, direct_retry_delays: asyncio.Queue[tuple[float, asyncio.Future[None]]],
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        scheduler = direct_retry_scheduler
+        await scheduler.refresh_limits("claude")
+        task = scheduler._direct_retries["claude"]
+        _, gate = await asyncio.wait_for(direct_retry_delays.get(), 1)
+
+        def fail() -> None:
+            raise RuntimeError("private text")
+
+        monkeypatch.setattr(scheduler, "_persist", fail)
+        gate.set_result(None)
+        await asyncio.wait_for(task, 1)
+        assert scheduler.providers["claude"].read_calls == 2
+        assert not scheduler._attempts and not scheduler._direct_retries
+
+    asyncio.run(scenario())
+    assert "tool=claude refresh failed: RuntimeError" in caplog.messages
+    assert "private text" not in caplog.text
 
 
 @pytest.mark.parametrize("signal", ["weekly", "five_hour"])

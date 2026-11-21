@@ -139,6 +139,7 @@ def test_claude_direct_windows_headers_observed_and_credential_immutability(sett
     http, cli = FakeHttp(response(usage())), FakeCli()
     snapshot = asyncio.run(ClaudeProvider(settings, runner=cli, http=http).read_limits())
     assert snapshot == LimitsSnapshot(Window(17.5, NOW + 18000, 300), Window(45, NOW + 604800, 10080), None, NOW - 30)
+    assert snapshot.direct_retry is False
     assert http.calls == [(CLAUDE_URL, {
         "Authorization": f"Bearer {TOKEN}", "anthropic-beta": "oauth-2025-04-20",
         "Accept": "application/json", "User-Agent": "claude-cli/2.1.296 (external, cli)",
@@ -299,7 +300,8 @@ def test_claude_ineligible_warning_once_per_process_and_previous_list_kept(
     ("429", 1, 0, ProviderError), ("500", 1, 0, ProviderError),
     ("network", 1, 0, ProviderError), ("empty", 0, 0, ReaderSignedOut),
     ("nonstring", 0, 0, ReaderSignedOut), ("missing", 0, 0, ReaderSignedOut),
-    ("bad_json", 0, 1, None), ("bad_shape", 0, 1, None), ("unreadable", 0, 1, None),
+    ("bad_json", 0, 1, None), ("bad_shape", 0, 1, None), ("missing_oauth", 0, 1, None),
+    ("unreadable", 0, 1, None),
     ("no_version", 0, 1, None), ("cli", 0, 1, None),
 ])
 def test_claude_fallback_and_failures(
@@ -315,6 +317,8 @@ def test_claude_fallback_and_failures(
         path.write_text("bad json")
     if kind == "bad_shape":
         path.write_text("[]")
+    if kind == "missing_oauth":
+        path.write_text("{}")
     if kind == "unreadable":
         original = Path.read_text
         def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
@@ -337,11 +341,51 @@ def test_claude_fallback_and_failures(
             assert str(error.value) == "Claude usage read failed (HTTP 500)"
         assert "private-body-sentinel" not in str(error.value)
     else:
-        assert asyncio.run(reader.read_limits("cli" if kind == "cli" else "direct")).five_hour.used_percent == 17.5
+        snapshot = asyncio.run(reader.read_limits("cli" if kind == "cli" else "direct"))
+        assert snapshot.five_hour.used_percent == 17.5
+        assert snapshot.direct_retry is (kind in {"expired", "soon", "401"})
     assert len(http.calls) == http_calls and cli.calls == cli_calls
     if path:
         assert (path.read_bytes(), path.stat().st_mtime_ns) == before
     assert all(secret not in caplog.text for secret in (TOKEN, "private-body-sentinel", "private error sentinel"))
+
+
+@pytest.mark.parametrize("fallback", ["expired", "401"])
+def test_claude_direct_retry_refreshes_details_after_cli_token_refresh(
+    fallback: str, settings: Settings, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        claude_auth(settings, expiresAt=(NOW if fallback == "expired" else NOW + 3600) * 1000)
+        cli = FakeCli()
+
+        async def refresh_token(*args: Any, **kwargs: Any) -> CommandResult:
+            result = await cli(*args, **kwargs)
+            claude_auth(settings)
+            return result
+
+        payload = usage(
+            seven_day_breakdown={"as_of": iso(NOW + 610)},
+            cedar_ember={"eligible": True, "grants": [grant(["seven_day"], 10000)],
+                         "event_props": {"tier": "claude_pro"}},
+            limits=[{"kind": "weekly_scoped", "scope": {"model": {"display_name": "Fable"}}, "percent": 23}],
+        )
+        http = FakeHttp(*([HttpResponse(401, b"")] if fallback == "401" else []), response(payload))
+        provider = ClaudeProvider(settings, runner=refresh_token, http=http)
+        scheduler = scheduler_for(settings, provider)
+        await scheduler.refresh_limits("claude")
+        task = scheduler._direct_retries["claude"]
+        assert cli.calls == 1 and scheduler.states["claude"].resets is None
+        monkeypatch.setattr("stoke.clock.now", lambda: NOW + 610)
+        await asyncio.wait_for(task, 1)
+        state = scheduler.states["claude"]
+        assert state.resets == ResetCredits(1, [ResetCredit("Full reset", NOW - 100, NOW + 10000)], NOW + 610)
+        assert state.scoped_limits == [ScopedLimit("Fable", 23, None)] and state.plan_name == "Pro"
+        assert len(http.calls) == (2 if fallback == "401" else 1) and cli.calls == 1
+        assert not scheduler._attempts and not scheduler._direct_retries
+        assert load(scheduler.path, settings, scheduler.providers) == scheduler.states
+
+    monkeypatch.setattr("stoke.scheduler.DIRECT_RETRY_SECONDS", 0)
+    asyncio.run(scenario())
 
 
 def test_claude_ten_minute_guard_records_failed_attempts(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

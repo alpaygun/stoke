@@ -1,6 +1,7 @@
 """API contract, POST protection, persistence, and manual request concurrency."""
 
 import asyncio
+from copy import deepcopy
 from typing import Callable
 
 import httpx
@@ -11,10 +12,10 @@ from conftest import FakeProvider, FakeReader
 from stoke.api import create_app
 from stoke.config import Settings
 from stoke.cycles import CYCLE_RETENTION_SECONDS, CycleRecord
-from stoke.models import Window
+from stoke.models import ResetCredit, ResetCredits, ScopedLimit, Window, serialize_tool
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import Scheduler
-from stoke.store import load
+from stoke.store import load, save
 
 HEADERS = {"X-Stoke": "1"}
 
@@ -413,6 +414,159 @@ def make_scheduler(settings: Settings, provider: FakeProvider | None = None) -> 
     actual = provider if provider is not None else FakeProvider()
     tools = {"claude": actual}
     return Scheduler(tools, load(settings.data_dir / "state.json", settings, tools), settings)
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+@pytest.mark.parametrize("available, expires_at, expected_available", [
+    (2, 999, 1),
+    (3, 999, 2),
+    (2, 1000, 1),
+    (0, 999, 0),
+    (1, 999, 0),
+    (2, 1001, 2),
+])
+def test_live_serialization_filters_expired_credits_without_mutating_state(
+    name: str, available: int, expires_at: int, expected_available: int,
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.resets = ResetCredits(available, [
+        ResetCredit("First reset", 10, expires_at, False),
+        ResetCredit("Future reset", 20, 2000, True),
+    ], 900, 1500)
+    before = deepcopy(state)
+
+    result = serialize_tool(state, now=1000, settings=settings)
+
+    expected_credits = [{"title": "Future reset", "granted_at": 20, "expires_at": 2000, "usable": True}]
+    if expires_at > 1000:
+        expected_credits.insert(0, {"title": "First reset", "granted_at": 10, "expires_at": expires_at, "usable": False})
+    assert result["resets"] == {
+        "available": expected_available, "credits": expected_credits,
+        "read_at": 900, "cooldown_until": 1500,
+    }
+    assert state == before
+
+
+def test_live_serialization_preserves_remaining_credit_order(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    state = make_scheduler(settings).states["claude"]
+    state.resets = ResetCredits(3, [
+        ResetCredit("Later reset", 10, 3000),
+        ResetCredit("Expired reset", 20, 999),
+        ResetCredit("Earlier reset", 30, 2000),
+    ], 900)
+
+    resets = serialize_tool(state, now=1000, settings=settings)["resets"]
+
+    assert resets["available"] == 2
+    assert [credit["title"] for credit in resets["credits"]] == ["Later reset", "Earlier reset"]
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_persisted_serialization_keeps_expired_credits(name: str, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.resets = ResetCredits(3, [ResetCredit("Expired reset", 10, 999)], 900, 1500)
+
+    assert serialize_tool(state)["resets"] == {
+        "available": 3,
+        "credits": [{"title": "Expired reset", "granted_at": 10, "expires_at": 999, "usable": None}],
+        "read_at": 900, "cooldown_until": 1500,
+    }
+
+
+def test_state_filters_expired_stored_credits_for_all_tools(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+    settings = settings_factory()
+    providers = {name: FakeProvider(name) for name in ("claude", "codex")}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    for name, available in [("claude", 2), ("codex", 3)]:
+        states[name].resets = ResetCredits(available, [
+            ResetCredit("Expired reset", 10, 999), ResetCredit("Future reset", 20, 2000),
+        ], 900, 1500)
+    save(path, states)
+    scheduler = Scheduler(providers, load(path, settings, providers), settings)
+
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        for name, available in [("claude", 1), ("codex", 2)]:
+            assert response.json()["tools"][name]["resets"] == {
+                "available": available,
+                "credits": [{"title": "Future reset", "granted_at": 20, "expires_at": 2000, "usable": None}],
+                "read_at": 900, "cooldown_until": 1500,
+            }
+        now[0] = 2000
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        for name, available in [("claude", 0), ("codex", 1)]:
+            assert response.json()["tools"][name]["resets"]["credits"] == []
+            assert response.json()["tools"][name]["resets"]["available"] == available
+    assert scheduler.states == states
+    assert load(path, settings, providers) == states
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_live_serialization_filters_expired_scoped_limits_without_mutating_state(
+    name: str, settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.scoped_limits = [
+        ScopedLimit("Expired model", 12, 999), ScopedLimit("Future model", 34, 1001),
+        ScopedLimit("Boundary model", 56, 1000), ScopedLimit("Undated model", 78, None),
+        ScopedLimit("Epoch model", 90, 0),
+    ]
+    before = deepcopy(state)
+
+    assert serialize_tool(state, now=1000, settings=settings)["scoped_limits"] == [
+        {"label": "Future model", "used_percent": 34, "resets_at": 1001},
+        {"label": "Undated model", "used_percent": 78, "resets_at": None},
+    ]
+    assert state == before
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_persisted_serialization_keeps_expired_scoped_limits(name: str, settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    state = load(settings.data_dir / "state.json", settings, {name: FakeProvider(name)})[name]
+    state.scoped_limits = [ScopedLimit("Expired model", 12, 999), ScopedLimit("Epoch model", 34, 0)]
+
+    assert serialize_tool(state)["scoped_limits"] == [
+        {"label": "Expired model", "used_percent": 12, "resets_at": 999},
+        {"label": "Epoch model", "used_percent": 34, "resets_at": 0},
+    ]
+
+
+def test_state_filters_expired_stored_scoped_limits(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    settings = settings_factory()
+    scheduler = make_scheduler(settings)
+    scheduler.states["claude"].scoped_limits = [
+        ScopedLimit("Expired model", 12, 999), ScopedLimit("Boundary model", 34, 1000),
+        ScopedLimit("Future model", 56, 1001), ScopedLimit("Undated model", 78, None),
+    ]
+    before = deepcopy(scheduler.states)
+    save(scheduler.path, scheduler.states)
+    scheduler.states = load(scheduler.path, settings, scheduler.providers)
+
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        assert response.json()["tools"]["claude"]["scoped_limits"] == [
+            {"label": "Future model", "used_percent": 56, "resets_at": 1001},
+            {"label": "Undated model", "used_percent": 78, "resets_at": None},
+        ]
+    assert scheduler.states == before
+    assert load(scheduler.path, settings, scheduler.providers) == before
 
 
 def test_state_shape_manual_result_health_and_page(

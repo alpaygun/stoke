@@ -1836,6 +1836,7 @@
       fill.style.width = `${clamp((weekly ? tool.weeklyNum : tool.fiveUsedNum) / 100) * 100}%`;
       track.append(fill);
       group.append(label, track);
+      if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
       if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit => {
         const row = el('div', 'usage-label scoped-label');
         row.append(el('span', 'muted', `Weekly · ${limit.label}`), el('span', 'mono', `${Math.round(limit.used_percent)}%`));
@@ -1847,7 +1848,6 @@
           group.append(el('span', 'weekly-reset', `resets ${when(limit.resets_at, now())}`));
         }
       });
-      if (weekly) group.append(text('span', 'weekly-reset', tool, 'weeklyReset'));
       if (weekly && (tool.limitsAt || tool.autoRefreshText)) {
         const row = el('div', 'meta-row');
         if (tool.limitsAt) row.append(text('span', 'weekly-reset', tool, 'limitsAt'));

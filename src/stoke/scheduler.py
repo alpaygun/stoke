@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup", "planned", "reset"]
 STALE_RESET_LIMIT = 4
 REFRESH_BUSY_RETRY_SECONDS = 10
+# Leave a margin after the CLI's usage read for the vendor's 10-minute limit.
+DIRECT_RETRY_SECONDS = 610
 PLAN_QUIET_SECONDS = 5 * 3600
 PLAN_GRACE_SECONDS = 900
 WEEKLY_SHIFT_SECONDS = 86400
@@ -200,6 +202,7 @@ class Scheduler:
         self.refresh_events = {name: asyncio.Event() for name in self.readers}
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._direct_retries: dict[str, asyncio.Task[None]] = {}
         self._attempts: set[asyncio.Task[object]] = set()
         self._startup_pending = {name: False for name in providers}
 
@@ -301,7 +304,46 @@ class Scheduler:
         except Exception as error:
             logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
 
-    async def refresh_limits(self, name: str) -> ToolState:
+    def _schedule_direct_retry(self, name: str, base_at: int) -> None:
+        """Replace a tool's pending direct read follow-up after token refresh."""
+        previous = self._direct_retries.get(name)
+        if previous is not None:
+            previous.cancel()
+        task = asyncio.create_task(self._retry_direct_read(name, base_at), name=f"direct-retry:{name}")
+        self._direct_retries[name] = task
+        self._attempts.add(task)
+
+        def done(completed: asyncio.Task[None]) -> None:
+            self._attempts.discard(completed)
+            if self._direct_retries.get(name) is completed:
+                del self._direct_retries[name]
+
+        task.add_done_callback(done)
+        logger.info("tool=%s direct read follow-up in %s s", name, DIRECT_RETRY_SECONDS)
+
+    async def _retry_direct_read(self, name: str, base_at: int) -> None:
+        """Retry direct usage once, unless another read or changed settings supersede it."""
+        await asyncio.sleep(DIRECT_RETRY_SECONDS)
+        state = self.states[name]
+        for attempt in range(3):
+            if (state.read_mode != "direct" or state.auto_refresh.enabled
+                    or state.last_read is None or state.last_read.at != base_at):
+                logger.info("tool=%s direct read follow-up skipped: settings or last read changed", name)
+                return
+            try:
+                await self.refresh_limits(name, follow_up=True)
+            except AlreadyRunning:
+                if attempt < 2:
+                    await asyncio.sleep(REFRESH_BUSY_RETRY_SECONDS)
+            except ProviderError:
+                return
+            except Exception as error:
+                logger.warning("tool=%s refresh failed: %s", name, type(error).__name__)
+                return
+            else:
+                return
+
+    async def refresh_limits(self, name: str, *, follow_up: bool = False) -> ToolState:
         """Update usage and close a stored window after an early reset."""
         if name not in self.readers:
             raise RefreshUnsupported(name)
@@ -387,6 +429,9 @@ class Scheduler:
                 else:
                     logger.info("tool=%s read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
             self._persist()
+            if (snapshot.direct_retry and not follow_up and state.read_mode == "direct"
+                    and not state.auto_refresh.enabled):
+                self._schedule_direct_retry(name, state.last_read.at)
             return state
         finally:
             state.refreshing = False

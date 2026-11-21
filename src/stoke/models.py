@@ -98,6 +98,8 @@ class LimitsSnapshot:
     observed_at: int | None = None
     scoped: list[ScopedLimit] | None = None
     plan_name: str | None = None
+    # Set when a direct read fell back to the CLI only to refresh the login token.
+    direct_retry: bool = False
 
 
 @dataclass
@@ -212,6 +214,16 @@ def serialize_tool(
 
         if settings is None:
             raise ValueError("settings required for live serialization")
+        if data["resets"] is not None:
+            resets = data["resets"]
+            credits = resets["credits"]
+            resets["credits"] = [credit for credit in credits if credit["expires_at"] > now]
+            removed = len(credits) - len(resets["credits"])
+            resets["available"] = max(0, resets["available"] - removed)
+        data["scoped_limits"] = [
+            limit for limit in data["scoped_limits"]
+            if limit["resets_at"] is None or limit["resets_at"] > now
+        ]
         data["delay_seconds"] = settings.delay_for(state.name)
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
