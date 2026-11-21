@@ -212,6 +212,12 @@ def serialize_tool(
 
         if settings is None:
             raise ValueError("settings required for live serialization")
+        if data["resets"] is not None:
+            resets = data["resets"]
+            credits = resets["credits"]
+            resets["credits"] = [credit for credit in credits if credit["expires_at"] > now]
+            removed = len(credits) - len(resets["credits"])
+            resets["available"] = max(0, resets["available"] - removed)
         data["delay_seconds"] = settings.delay_for(state.name)
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
