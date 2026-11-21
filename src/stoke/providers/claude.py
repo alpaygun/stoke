@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+from dataclasses import replace
 from math import ceil
 from typing import Any
 
@@ -186,7 +187,7 @@ class ClaudeProvider:
         expires = oauth.get("expiresAt")
         if type(expires) is int and expires <= (now + 60) * 1000:
             logger.info("tool=claude direct read: access token expired, using CLI")
-            return await self._read_via_cli()
+            return replace(await self._read_via_cli(), direct_retry=True)
         if self._last_direct_at is not None and now - self._last_direct_at < 600:
             minutes = max(1, ceil((600 - (now - self._last_direct_at)) / 60))
             raise ProviderError(f"Claude usage was read less than 10 minutes ago; try again in {minutes} min")
@@ -203,7 +204,7 @@ class ClaudeProvider:
             raise ProviderError(f"Claude usage read failed: {error}") from None
         if response.status == 401:
             logger.info("tool=claude direct read got 401, using CLI")
-            return await self._read_via_cli()
+            return replace(await self._read_via_cli(), direct_retry=True)
         if response.status == 429:
             raise ProviderError("Claude usage endpoint rate limited (HTTP 429)")
         if response.status != 200:

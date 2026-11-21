@@ -98,6 +98,8 @@ class LimitsSnapshot:
     observed_at: int | None = None
     scoped: list[ScopedLimit] | None = None
     plan_name: str | None = None
+    # Set when a direct read fell back to the CLI only to refresh the login token.
+    direct_retry: bool = False
 
 
 @dataclass
