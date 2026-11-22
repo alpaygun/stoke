@@ -12,7 +12,7 @@ import pytest
 from stoke.config import Settings
 from stoke.models import QuotaGroup, ScopedLimit, Window
 from stoke.providers.antigravity import AntigravityProvider, parse_usage
-from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, redact
+from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeNotDelivered, StokeSignedOut, StokeUnverified, redact
 from stoke.runner import CommandResult
 
 NOW = 1800000000
@@ -140,7 +140,7 @@ def test_usage_synthetic_windows(offset: int, synthetic: bool) -> None:
     assert parsed.scoped == [ScopedLimit("Argon", 0, None if synthetic else week_end)]
     assert parsed.groups == [QuotaGroup(
         "third_party", None if synthetic else Window(0, day_end, 300),
-        None if synthetic else Window(0, week_end, 10080),
+        None if synthetic else Window(0, week_end, 10080), synthetic, synthetic,
     )]
 
 
@@ -355,9 +355,9 @@ def test_prompt_reconciliation_mapping(
             asyncio.run(provider.stoke())
         assert raised.value.delivered is delivered
     else:
-        with pytest.raises(ProviderError, match="^Antigravity prompt not delivered$") as raised:
+        with pytest.raises(StokeNotDelivered, match="^Antigravity prompt not delivered$") as raised:
             asyncio.run(provider.stoke())
-        assert type(raised.value) is ProviderError
+        assert raised.value.snapshot.groups
     assert [call.argv[-1] for call in runner.calls] == ["hi", "/usage"]
     assert all(not call.log_file.parent.exists() for call in runner.calls)
     assert PRIVATE not in caplog.text
@@ -381,9 +381,9 @@ def test_verify_only_reads_and_preserves_delivery_certainty(
             asyncio.run(provider.verify_stoke(delivered))
         assert raised.value.delivered is delivered
     else:
-        with pytest.raises(ProviderError, match="^Antigravity prompt not delivered$") as raised:
+        with pytest.raises(StokeNotDelivered, match="^Antigravity prompt not delivered$") as raised:
             asyncio.run(provider.verify_stoke(delivered))
-        assert type(raised.value) is ProviderError
+        assert raised.value.snapshot.groups
     assert [call.argv[-1] for call in runner.calls] == ["/usage"]
 
 
@@ -479,6 +479,62 @@ def test_cleanup_error_does_not_fail_stoke_or_stop_other_deletions(
     assert [record.getMessage() for record in caplog.records] == [
         "antigravity conversation cleanup failed: PermissionError",
     ]
+
+
+def test_third_party_prompt_uses_fixed_model_and_shares_the_full_snapshot(
+    settings: Settings, signed_in: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    conversation = signed_in.parent / "conversations" / f"{CONVERSATION}.db"
+    conversation.parent.mkdir()
+    conversation.write_text(PRIVATE, encoding="utf-8")
+    runner = FakeRunner(prompt_result(), read_result(confirmed=False), read_result())
+    provider = AntigravityProvider(settings, runner)
+    result = asyncio.run(provider.stoke_third_party())
+    verified = asyncio.run(provider.verify_third_party(True))
+    prompt, read, verify = runner.calls
+    assert prompt.argv == (
+        "agy", "--model", "gpt-oss-120b-medium", "--output-format", "json", "--disable-slash-commands",
+        "--log-file", str(prompt.log_file), "-p", "hi",
+    )
+    for call in (read, verify):
+        assert call.argv == ("agy", "--output-format", "json", "--log-file", str(call.log_file), "-p", "/usage")
+    assert result.window == verified.window == Window(50, NOW + 4 * HOUR, 300)
+    assert not result.snapshot.window_confirmed and verified.snapshot.window_confirmed
+    assert (result.duration_ms, verified.duration_ms) == (37, 19)
+    assert not conversation.exists()
+    assert PRIVATE not in caplog.text and PRIVATE not in repr(result)
+
+
+@pytest.mark.parametrize("prompt", [prompt_result(), prompt_result("ERROR"), prompt_result(timeout=True)])
+@pytest.mark.parametrize("buckets", [[], [bucket("3p-weekly"), bucket("3p-5h", reset_time=PRIVATE)]])
+def test_missing_3p_usage_after_any_prompt_requires_verification(
+    settings: Settings, signed_in: Path, prompt: CommandResult, buckets: list[dict[str, Any]],
+) -> None:
+    read = CommandResult(0, usage([bucket("gemini-5h")], buckets), PRIVATE, 19, False)
+    runner = FakeRunner(prompt, read)
+    with pytest.raises(StokeUnverified, match="^prompt sent; usage unverified$") as raised:
+        asyncio.run(AntigravityProvider(settings, runner).stoke_third_party())
+    assert raised.value.delivered and raised.value.snapshot.window_confirmed
+    assert len(runner.calls) == 2 and PRIVATE not in repr(raised.value.snapshot)
+
+
+@pytest.mark.parametrize("delivered", [True, False])
+def test_synthetic_3p_window_does_not_confirm_a_prompt(
+    settings: Settings, signed_in: Path, delivered: bool,
+) -> None:
+    sample = usage([bucket("gemini-5h"), bucket("3p-5h", 1, NOW + 5 * HOUR)])
+    runner = FakeRunner(CommandResult(0, sample, PRIVATE, 19, False))
+    with pytest.raises(StokeUnverified if delivered else StokeNotDelivered) as raised:
+        asyncio.run(AntigravityProvider(settings, runner).verify_third_party(delivered))
+    assert raised.value.snapshot.groups == [QuotaGroup("third_party", None, None, five_hour_synthetic=True)]
+    assert len(runner.calls) == 1 and runner.calls[0].argv[-1] == "/usage"
+
+
+def test_3p_verify_keeps_reader_sign_out_distinct(settings: Settings, signed_in: Path) -> None:
+    runner = FakeRunner(prompt_result("ERROR", error=AUTH_ERROR))
+    with pytest.raises(ReaderSignedOut, match="^Antigravity signed out$"):
+        asyncio.run(AntigravityProvider(settings, runner).verify_third_party(True))
+    assert len(runner.calls) == 1 and runner.calls[0].argv[-1] == "/usage"
 
 
 def test_google_oauth_redaction() -> None:

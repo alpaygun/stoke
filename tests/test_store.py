@@ -194,6 +194,7 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
             "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None, "scoped_limits": [],
             "show_scoped": True, "plan_name": None, "weekly_resets": [], "window_closed_at": None,
             "reset_hold_minutes": 30, "read_mode": "direct", "quota_groups": [], "pending_verify": None,
+            "third_party": None,
         }
     assert "using defaults" not in caplog.text
 

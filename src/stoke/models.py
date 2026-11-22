@@ -10,9 +10,12 @@ if TYPE_CHECKING:
     from .config import Settings
 
 READ_MODES = ("direct", "cli")
+THIRD_PARTY_MODES = ("hide", "show", "keep_open")
 
 PlanRepeat = Literal["once", "daily"]
 PlanResult = Literal["done", "missed", "broken"]
+ThirdPartyMode = Literal["hide", "show", "keep_open"]
+ThirdPartyWarningReason = Literal["did_not_open_window", "limits_unreadable"]
 
 
 def validate_plan(time: str, repeat: PlanRepeat, auto_after: bool | None) -> None:
@@ -95,6 +98,20 @@ class QuotaGroup:
     key: str
     five_hour: Window | None
     weekly: Window | None
+    five_hour_synthetic: bool = False
+    weekly_synthetic: bool = False
+
+
+def third_party_quota(groups: list[QuotaGroup] | None) -> QuotaGroup | None:
+    return next((group for group in groups or () if group.key == "third_party"), None)
+
+
+def group_window_confirmed(group: QuotaGroup, observed_at: int) -> bool:
+    window = group.five_hour
+    return (
+        not group.five_hour_synthetic and window is not None
+        and window.used_percent > 0 and window.resets_at > observed_at
+    )
 
 
 @dataclass
@@ -132,6 +149,16 @@ class StokeResult:
     duration_ms: int
     scoped: list[ScopedLimit] | None = None
     groups: list[QuotaGroup] | None = None
+    snapshot: LimitsSnapshot | None = None
+
+
+@dataclass
+class GroupStokeResult:
+    """A confirmed auxiliary window and the usage snapshot that reported it."""
+
+    snapshot: LimitsSnapshot
+    window: Window
+    duration_ms: int
 
 
 @dataclass
@@ -144,6 +171,24 @@ class StokeRecord:
     error: str | None
     opened_new_window: bool | None
     duration_ms: int | None
+
+
+@dataclass
+class ThirdPartyState:
+    """Independent schedule and observations for the auxiliary quota group."""
+
+    mode: ThirdPartyMode = "show"
+    five_hour: Window | None = None
+    next_stoke_at: int | None = None
+    last_stoke: StokeRecord | None = None
+    consecutive_failures: int = 0
+    pending_verify: PendingVerify | None = None
+    warning: str | None = None
+    warning_reason: ThirdPartyWarningReason | None = None
+    running: bool = False
+
+    def active(self, auto_stoke: bool) -> bool:
+        return self.mode == "keep_open" and auto_stoke
 
 
 @dataclass
@@ -219,6 +264,7 @@ class ToolState:
     plan_name: str | None = None
     quota_groups: list[QuotaGroup] = field(default_factory=list)
     pending_verify: PendingVerify | None = None
+    third_party: ThirdPartyState | None = None
 
 
 def serialize_tool(
@@ -234,6 +280,8 @@ def serialize_tool(
     if now is None:
         del data["running"]
         del data["refreshing"]
+        if state.third_party is not None:
+            del data["third_party"]["running"]
     else:
         # Import after models are defined; the scheduler owns the scheduling rules.
         from .scheduler import PLAN_QUIET_SECONDS, effective_next
@@ -254,7 +302,13 @@ def serialize_tool(
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
         data["reset_closes_window"] = reset_closes_window
-        data["capabilities"] = {"reset_credits": reset_credits, "read_modes": read_modes}
+        tp = state.third_party
+        data["capabilities"] = {
+            "reset_credits": reset_credits, "read_modes": read_modes, "third_party": tp is not None,
+        }
+        if tp is not None:
+            data["third_party"]["window_open"] = tp.five_hour is not None and tp.five_hour.resets_at > now
+            data["third_party"]["active"] = tp.active(state.auto_stoke)
         for entry in data["weekly_resets"]:
             del entry["credits_before"]
         data["auth"] = {key: dict(value) for key, value in (auth_labels or {}).items()}

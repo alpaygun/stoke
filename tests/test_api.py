@@ -594,12 +594,12 @@ def test_state_shape_manual_result_health_and_page(
             "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct",
             "refreshable": False, "refreshing": False, "resets": None,
             "reset_closes_window": False, "delay_seconds": 90,
-            "capabilities": {"reset_credits": True, "read_modes": True},
+            "capabilities": {"reset_credits": True, "read_modes": True, "third_party": False},
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None,
             "scoped_limits": [], "show_scoped": True, "plan_name": None, "weekly_resets": [],
-            "quota_groups": [], "pending_verify": None,
+            "quota_groups": [], "pending_verify": None, "third_party": None,
             "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Account login", "expires_at": None}},
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()
@@ -632,7 +632,9 @@ def test_dry_run_tool_capabilities_are_live_and_gate_read_mode(
         tools = response.json()["tools"]
         for name, supported in [("claude", True), ("codex", True), ("antigravity", False)]:
             assert tools[name]["refreshable"] is True
-            assert tools[name]["capabilities"] == {"reset_credits": supported, "read_modes": supported}
+            assert tools[name]["capabilities"] == {
+                "reset_credits": supported, "read_modes": supported, "third_party": name == "antigravity",
+            }
             result = client.post(f"/api/tools/{name}/read-mode", headers=HEADERS, json={"mode": "cli"})
             if supported:
                 assert result.status_code == 200 and result.json()["read_mode"] == "cli"

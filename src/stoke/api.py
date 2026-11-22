@@ -87,7 +87,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
 
     @app.get("/api/cycles")
     async def get_cycles(tool: str | None = None, days: int = Query(default=30, ge=1, le=30)) -> dict[str, Any]:
-        if tool is not None:
+        if tool is not None and tool != "antigravity-3p":
             require_tool(tool)
         try:
             records = scheduler.cycles.read(clock.now(), tool=tool, days=days)
@@ -170,6 +170,20 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
         if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
             raise HTTPException(422, "body must contain enabled: bool")
         state = scheduler.set_auto(name, body["enabled"])
+        return serialize(state)
+
+    @app.post("/api/tools/{name}/third-party")
+    async def set_third_party(name: str, request: Request) -> dict[str, Any]:
+        require_tool(name)
+        if scheduler.states[name].third_party is None:
+            raise HTTPException(404, "third-party quota not supported")
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {"mode"}:
+                raise ValueError("body must contain exactly mode")
+            state = scheduler.set_third_party(name, body["mode"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
         return serialize(state)
 
     @app.post("/api/tools/{name}/weekly-resets/dismiss")

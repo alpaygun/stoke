@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any, Iterator, Protocol
 
-from ..models import LimitsSnapshot, StokeResult, Window
+from ..models import GroupStokeResult, LimitsSnapshot, StokeResult, Window
 
 _SECRET = re.compile(
     r"sk-ant-[A-Za-z0-9_\-]+|eyJ[A-Za-z0-9_\-]{20,}|ya29\.[A-Za-z0-9_\-.]+|1//[A-Za-z0-9_\-]+"
@@ -37,9 +37,18 @@ class LimitsUnreadable(ProviderError):
 class StokeUnverified(ProviderError):
     """A prompt may have been sent but no read has confirmed an open window."""
 
-    def __init__(self, message: str, *, delivered: bool) -> None:
+    def __init__(self, message: str, *, delivered: bool, snapshot: LimitsSnapshot | None = None) -> None:
         super().__init__(message)
         self.delivered: bool = delivered
+        self.snapshot = snapshot
+
+
+class StokeNotDelivered(ProviderError):
+    """A prompt was not delivered, but the usage read still succeeded."""
+
+    def __init__(self, message: str, *, snapshot: LimitsSnapshot) -> None:
+        super().__init__(message)
+        self.snapshot = snapshot
 
 
 class StokeSignedOut(ProviderError):
@@ -102,6 +111,14 @@ class LimitReader(Protocol):
     label: str
 
     async def read_limits(self, mode: str = "direct") -> LimitsSnapshot: ...
+
+
+class ThirdPartyStoker(Protocol):
+    """Optional operations for a provider's independent quota group."""
+
+    async def stoke_third_party(self) -> GroupStokeResult: ...
+
+    async def verify_third_party(self, delivered: bool) -> GroupStokeResult: ...
 
 
 def json_objects(text: str) -> Iterator[dict[str, Any]]:

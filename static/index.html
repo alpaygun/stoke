@@ -163,10 +163,8 @@
     .usage-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; font-size: 14px; }
     .usage-label .usage-end { display: inline-flex; align-items: baseline; gap: 10px; margin-left: auto; }
     .usage-label .reset-at { color: var(--text-3); font-size: 12.5px; white-space: nowrap; }
-    .usage > .meta-row { margin-top: 4px; }
     .track { height: 8px; }
     .weekly-fill { background: var(--weekly); }
-    .weekly-reset { color: var(--text-3); font-size: 12.5px; line-height: 1.7; }
     .stats { gap: 12px; }
     .stat { position: relative; gap: 4px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--surface-2); }
     .stat-head { display: flex; align-items: center; gap: 6px; min-height: 16px; font-size: 13px; color: var(--text-3); }
@@ -359,13 +357,12 @@
     .next-plan .ic { width: 14px; height: 14px; }
     .refresh { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
     .refresh .ic { color: var(--text-3); }
-    .meta-row { display: flex; align-items: center; gap: 6px; }
-    .auto-ic { position: relative; display: flex; }
-    .auto-ic > summary { list-style: none; cursor: pointer; display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--accent-ink); }
+    .auto-ic { position: relative; display: flex; align-self: flex-start; }
+    .auto-ic > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; margin-left: -6px; border-radius: var(--radius-sm); color: var(--accent-ink); font-size: 12px; font-weight: 500; white-space: nowrap; }
     .auto-ic > summary::-webkit-details-marker, .theme-one > summary::-webkit-details-marker { display: none; }
     .auto-ic > summary:hover, .auto-ic[open] > summary { background: var(--accent-soft); }
     .auto-ic .ic { width: 14px; height: 14px; }
-    .auto-ic .info-pop { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: min(260px, calc(100vw - 48px)); padding: 12px 14px; gap: 4px; }
+    .auto-ic .info-pop { top: calc(100% + 8px); left: -6px; width: min(260px, calc(100vw - 48px)); padding: 12px 14px; gap: 4px; }
     .auto-ic .info-pop strong { font-weight: 600; }
     .theme-one { position: relative; }
     .theme-one > summary { list-style: none; cursor: pointer; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); }
@@ -541,6 +538,20 @@
             <input id="ss-enabled" type="checkbox" class="switch">
           </div>
         </section>
+        <section id="tp-box" class="settings-box" hidden>
+          <div class="settings-row">
+            <span class="settings-tile" data-settings-icon="info"></span>
+            <div class="settings-copy"><strong>Claude and GPT models</strong><span>One shared limit for the Claude and GPT-OSS models in Antigravity</span></div>
+          </div>
+          <div class="settings-row settings-sub">
+            <div class="segmented" role="radiogroup" aria-label="Claude and GPT models">
+              <label><input type="radio" name="third_party" value="hide"> Hide</label>
+              <label><input type="radio" name="third_party" value="show" checked> Show</label>
+              <label><input type="radio" name="third_party" value="keep_open"> Keep open</label>
+            </div>
+          </div>
+        </section>
+        <p id="tp-caution" class="settings-caution" hidden><span data-settings-icon="info"></span><span>Sends a tiny GPT-OSS 120B message whenever this group's 5-hour window ends, only while Auto-stoke is on. Uses a small part of the group's weekly limit.</span></p>
         <section id="rm-box" class="settings-box">
           <div class="settings-row">
             <span class="settings-tile" data-settings-icon="refresh"></span>
@@ -631,6 +642,12 @@
       ['read_signed_out', ['Usage reading signed out', 'The browser login that reads usage has expired. Stoking is not affected. Sign in again from the stoke folder on the server:']],
       ['token_expiring', ['Stoke token expires soon', '']],
       ['read_login_expiring', ['Usage login expires soon', '']]
+    ]);
+    const THIRD_PARTY_WARN = new Map([
+      ['signed_out', WARN.get('signed_out')],
+      ['did_not_open_window', ['No new window opened', 'The keep-open stoke did not start a new Claude & GPT window.']],
+      ['limits_unreadable', ['Limits unreadable', 'The Claude & GPT limits could not be read.']],
+      ['stoke_failing', ['Keep-open stoke keeps failing', 'Several attempts in a row failed; retrying with backoff. Gemini stoking is not affected.']]
     ]);
     const dialogOpen = () => !!document.querySelector('dialog[open]');
     let state = null;
@@ -749,6 +766,9 @@
         refreshable: !!tool.refreshable, refreshing: !!tool.refreshing,
         resetCredits: tool.capabilities?.reset_credits ?? true,
         resets: tool.resets, scoped: tool.scoped_limits ?? [], show_scoped: tool.show_scoped ?? true,
+        thirdParty: tool.third_party ?? null,
+        thirdPartyQuota: tool.quota_groups?.find(group => group.key === 'third_party'),
+        thirdPartyWarning: THIRD_PARTY_WARN.get(tool.third_party?.warning),
         planName: tool.plan_name ?? null,
         auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: ['token_expiring', 'read_login_expiring'].includes(tool.warning),
         weeklyResets: tool.weekly_resets ?? [],
@@ -1166,7 +1186,8 @@
         const { box, copy } = infoRow('clock'), head = el('div', 'row-head');
         head.append(el('strong', '', plan.repeat === 'daily' ? `Every day ${plan.time}` : `Once, ${when(plan.target_at, current)}`),
           el('span', 'muted', plan.auto_after == null ? 'auto-stoke kept as is' : `then auto-stoke ${plan.auto_after ? 'on' : 'off'}`));
-        copy.append(head, el('span', 'mono', `No auto-stoke ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
+        const noAuto = tool.thirdParty ? 'No Gemini auto-stoke' : 'No auto-stoke';
+        copy.append(head, el('span', 'mono', `${noAuto} ${clock(tool.quiet_from)}–${clock(plan.target_at)}`));
         rows.append(box);
       }
       const outcome = recentPlanOutcome(tool, current);
@@ -1215,7 +1236,12 @@
       const value = planTime.value;
       const [hours, minutes] = value.split(':').map(Number);
       const from = (hours * 60 + minutes - 300 + 1440) % 1440;
-      document.querySelector('#plan-hint').textContent = value ? `No auto-stoke from ${pad(Math.floor(from / 60))}:${pad(from % 60)} until ${value}. (${state?.timezone ?? 'UTC'})` : '';
+      const start = `${pad(Math.floor(from / 60))}:${pad(from % 60)}`;
+      const selected = Array.from(planTools.querySelectorAll('input:checked'), input => state.tools[input.value]);
+      const lines = [];
+      if (value && (!selected.length || selected.some(tool => !tool.third_party))) lines.push(`No auto-stoke from ${start} until ${value}. (${state?.timezone ?? 'UTC'})`);
+      if (value && selected.some(tool => tool.third_party)) lines.push(`No Gemini auto-stoke ${start}–${value} (${state?.timezone ?? 'UTC'})`);
+      document.querySelector('#plan-hint').textContent = lines.join('\n');
       updatePlanSave();
     }
     function syncPlanStatus() {
@@ -1248,7 +1274,7 @@
         input.setAttribute('type', 'checkbox');
         input.setAttribute('value', tool.name);
         input.checked = tool.name === name;
-        input.addEventListener('change', updatePlanSave);
+        input.addEventListener('change', updatePlanHint);
         copy.append(el('strong', '', tool.label), el('span'));
         label.append(copy, input);
         planTools.append(label);
@@ -1352,6 +1378,7 @@
       const parts = [];
       if (tool.hasWarning) parts.push(warning(tool));
       parts.push(planSection(tool));
+      if (tool.thirdParty) parts.push(thirdPartySection(tool));
       const resets = el('section', 'setting-section'), history = el('div', 'signin-rows');
       resets.append(el('h3', '', 'Weekly resets'));
       tool.weeklyResets.slice(0, 3).forEach(entry => history.append(weeklyRow(entry)));
@@ -1387,6 +1414,41 @@
       section.append(rows);
       parts.push(section);
       return parts;
+    }
+    function thirdPartySection(tool) {
+      const tp = tool.thirdParty, keeping = tp.mode === 'keep_open';
+      const section = el('section', 'setting-section'), rows = el('div', 'signin-rows');
+      section.append(el('h3', '', 'Claude and GPT models'));
+      if (tool.thirdPartyWarning) {
+        const [title, detail] = tool.thirdPartyWarning;
+        rows.append(warning({ name: tool.name, caution: true, warningKey: tp.warning, warning: title, warningDetail: detail }));
+      }
+      const modeRow = infoRow(keeping ? 'flame' : 'info'), head = el('div', 'row-head');
+      const modeText = { hide: 'Hidden', show: 'Shown on the card', keep_open: 'Window kept open' };
+      head.append(el('strong', '', modeText[tp.mode]), el('span', 'muted', keeping ? 'GPT-OSS 120B' : 'no messages sent'));
+      modeRow.copy.append(head, el('span', 'mono', tp.window_open ? `Window until ${clock(tp.five_hour.resets_at)}` : 'Window closed'));
+      rows.append(modeRow.box);
+      if (keeping) {
+        const last = tp.last_stoke;
+        const lastRow = infoRow(last ? (last.ok ? 'check' : 'warning') : 'clock', last && !last.ok ? 'warn' : '');
+        const lastHead = el('div', 'row-head');
+        let result = 'No stoke yet.';
+        if (last) {
+          if (!last.ok) result = last.error;
+          else if (last.opened_new_window === false) result = 'did not open a new window';
+          else result = last.opened_new_window ? 'opened a new window' : 'window confirmed';
+        }
+        lastHead.append(el('strong', '', 'Last stoke'), el('span', 'muted', clock(last?.at)));
+        lastRow.copy.append(lastHead, el('span', last && !last.ok ? 'mono status-warn' : 'mono', result));
+        rows.append(lastRow.box);
+        const nextRow = infoRow('clock'), nextHead = el('div', 'row-head');
+        const nextHint = tp.active ? (tp.consecutive_failures ? 'retry with backoff' : 'when the window ends') : 'paused: Auto-stoke is off';
+        nextHead.append(el('strong', '', 'Next stoke'), el('span', 'muted', nextHint));
+        nextRow.copy.append(nextHead, el('span', 'mono', clock(tp.active ? tp.next_stoke_at : null)));
+        rows.append(nextRow.box);
+      }
+      section.append(rows);
+      return section;
     }
     function dot(tool) { return el('span', `dot${tool.caution ? ' caution' : ''}`); }
     const infoDialog = document.querySelector('#info-dialog');
@@ -1444,12 +1506,14 @@
       if (event.key === 'Enter') { event.preventDefault(); submitWeeklyPage(); }
     });
     document.querySelector('#weekly-close').addEventListener('click', () => weeklyDialog.close());
-    function warnLine(tool) {
-      const line = el('button', `warn-line${tool.caution ? ' caution' : ''}`);
+    function warnLine(tool, thirdParty = false) {
+      const line = el('button', `warn-line${tool.caution || thirdParty ? ' caution' : ''}`);
       line.setAttribute('type', 'button');
-      line.setAttribute('data-key', `${tool.name}:warning`);
+      line.setAttribute('data-key', `${tool.name}:${thirdParty ? 'third-party-warning' : 'warning'}`);
       const copy = el('span', 'warn-text');
-      copy.append(el('b', '', tool.label), el('span', '', ` · ${tool.warning.charAt(0).toLowerCase()}${tool.warning.slice(1)}`));
+      const title = thirdParty ? tool.thirdPartyWarning[0] : tool.warning;
+      const prefix = thirdParty ? ' · Claude & GPT: ' : ' · ';
+      copy.append(el('b', '', tool.label), el('span', '', `${prefix}${title.charAt(0).toLowerCase()}${title.slice(1)}`));
       line.append(icon('warning'), copy, el('span', 'more', 'details'), icon('chevron'));
       line.addEventListener('click', event => { event.stopPropagation(); openInfo(tool.name); });
       return line;
@@ -1490,7 +1554,9 @@
         button.setAttribute('aria-label', `${tool.label} ${kind}`);
         button.setAttribute('title', label);
         button.append(menuIcon(kind));
-        if (kind === 'info' && tool.hasWarning) button.append(dot(tool));
+        if (kind === 'info' && (tool.hasWarning || tool.thirdPartyWarning)) {
+          button.append(tool.hasWarning ? dot(tool) : el('span', 'dot caution'));
+        }
         button.addEventListener('click', () => {
           if (kind === 'settings') openSettings(tool.name);
           else openInfo(tool.name);
@@ -1504,6 +1570,8 @@
     const arEnabled = document.querySelector('#ar-enabled'), arValue = document.querySelector('#ar-value');
     const arMinus = document.querySelector('#ar-minus'), arPlus = document.querySelector('#ar-plus');
     const ssBox = document.querySelector('#ss-box'), ssEnabled = document.querySelector('#ss-enabled');
+    const tpBox = document.querySelector('#tp-box'), tpCaution = document.querySelector('#tp-caution');
+    const tpModes = tpBox.querySelectorAll('input[name="third_party"]');
     const rmBox = document.querySelector('#rm-box'), readModes = document.querySelectorAll('input[name="read_mode"]');
     const rhBox = document.querySelector('#rh-box'), rhValue = document.querySelector('#rh-value');
     const rhMinus = document.querySelector('#rh-minus'), rhPlus = document.querySelector('#rh-plus');
@@ -1520,6 +1588,8 @@
       autoEnabled.disabled = settingsSaving;
       arEnabled.disabled = settingsSaving || arBox.hidden;
       ssEnabled.disabled = settingsSaving || ssBox.hidden;
+      tpModes.forEach(r => { r.disabled = settingsSaving || tpBox.hidden; });
+      tpCaution.hidden = tpBox.hidden || tpBox.querySelector('input:checked')?.value !== 'keep_open';
       readModes.forEach(r => { r.disabled = settingsSaving || rmBox.hidden; });
       arValue.disabled = disabled;
       arMinus.disabled = disabled || Number(arValue.value) <= 10;
@@ -1545,6 +1615,8 @@
       document.querySelector('#ss-title').textContent = ssTitle;
       ssEnabled.setAttribute('aria-label', ssTitle);
       ssEnabled.checked = tool.show_scoped ?? true;
+      tpBox.hidden = !tool.capabilities?.third_party;
+      tpModes.forEach(r => { r.checked = r.value === (tool.third_party?.mode ?? 'show'); });
       rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);
       rhValue.value = tool.reset_hold_minutes;
       arEnabled.checked = ar.enabled;
@@ -1564,6 +1636,7 @@
         : 'Asks the usage endpoint directly; falls back to the CLI if needed';
     }
     document.querySelectorAll('input[name="read_mode"]').forEach(r => r.addEventListener('input', syncReadHint));
+    tpBox.addEventListener('change', syncSettings);
     arEnabled.addEventListener('input', () => syncSettings());
     arValue.addEventListener('input', () => { digitsOnly(arValue); syncSettings(); });
     function stepMinutes(direction) {
@@ -1593,15 +1666,19 @@
       const ssChanged = !ssBox.hidden && ssEnabled.checked !== (tool.show_scoped ?? true);
       const mode = document.querySelector('input[name="read_mode"]:checked').value;
       const rmChanged = !rmBox.hidden && tool.capabilities?.read_modes !== false && mode !== tool.read_mode;
+      const tpMode = tpBox.querySelector('input:checked')?.value;
+      const tpChanged = !tpBox.hidden && tpMode !== tool.third_party?.mode;
       const minutes = Math.min(300, Math.max(0, Number(rhValue.value)));
       const rhChanged = tool.refreshable && tool.reset_closes_window && minutes !== tool.reset_hold_minutes;
-      if (!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged) { settingsDialog.close(); return; }
+      if (!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged && !tpChanged) { settingsDialog.close(); return; }
       settingsSaving = true;
       busy.add(name);
       syncControls();
       syncSettings();
       try {
-        if (autoChanged) await post(name, 'auto', { enabled });
+        if (autoChanged && !enabled) await post(name, 'auto', { enabled });
+        if (tpChanged) await post(name, 'third-party', { mode: tpMode });
+        if (autoChanged && enabled) await post(name, 'auto', { enabled });
         if (arChanged) await post(name, 'auto-refresh', body);
         if (ssChanged) await post(name, 'show-scoped', { enabled: ssEnabled.checked });
         if (rmChanged) await post(name, 'read-mode', { mode });
@@ -1643,6 +1720,18 @@
         });
       }
       box.append(head, pop);
+      return box;
+    }
+    function autoRefreshInfo(tool) {
+      const box = popover(tool, 'auto-refresh', 'auto-ic'), summary = el('summary');
+      const every = tool.autoRefreshText.replace(/^auto-refresh /, '');
+      summary.setAttribute('data-key', `${tool.name}:auto-refresh-info`);
+      summary.setAttribute('aria-label', `Auto-refresh on, ${every}`);
+      summary.setAttribute('title', `Auto-refresh on · ${every}`);
+      summary.append(icon('cycle'), el('span', '', 'auto-refresh on'));
+      const pop = el('div', 'popover-surface info-pop');
+      pop.append(el('strong', '', 'Auto-refresh on'), el('span', 'muted', `Usage is read ${every}, without sending a message.`));
+      box.append(summary, pop);
       return box;
     }
     function stat(list, title, tool, field) {
@@ -1821,6 +1910,7 @@
       const alerts = el('div', 'alerts');
       vm.filter(tool => tool.hasWarning).sort((a, b) => Number(a.caution) - Number(b.caution))
         .forEach(tool => alerts.append(warnLine(tool)));
+      vm.filter(tool => tool.thirdPartyWarning).forEach(tool => alerts.append(warnLine(tool, true)));
       vm.flatMap(tool => tool.weeklyResets
         .filter(entry => entry.kind === 'early' && !entry.dismissed).map(entry => ({ tool, entry })))
         .sort((a, b) => b.entry.to_at - a.entry.to_at)
@@ -1845,6 +1935,7 @@
         const stats = el('div', 'stats');
         const last = stat(stats, 'Last stoke', tool, 'lastAt');
         if (!tool.lastOk && tool.lastTs != null) last.append(el('span', 'last-result failed', tool.lastResult));
+        if (tool.autoRefreshText) last.append(autoRefreshInfo(tool));
         const next = stat(stats, 'Next stoke', tool, 'nextAt');
         next.append(text('span', 'small muted', tool, 'nextMeta'));
         if (tool.plan && !tool.upcomingPlanned) {
@@ -1864,46 +1955,40 @@
     }
     function dialUsage(tool, weekly) {
       const group = el('div', 'usage'), label = el('div', 'usage-label');
-      const usage = el('span', 'mono', weekly ? tool.weeklyUsed : tool.fiveUsed);
-      label.append(el('span', 'muted', weekly ? 'Weekly use' : '5-hour use'));
-      if (weekly) {
-        const end = el('span', 'usage-end');
-        if (tool.weeklyReset != null) end.append(text('span', 'reset-at', tool, 'weeklyReset'));
-        end.append(usage);
-        label.append(end);
-      } else label.append(usage);
+      const end = el('span', 'usage-end');
+      const timeField = weekly ? 'weeklyReset' : 'limitsAt';
+      if (tool[timeField]) end.append(text('span', 'reset-at', tool, timeField));
+      end.append(el('span', 'mono', weekly ? tool.weeklyUsed : tool.fiveUsed));
+      label.append(el('span', 'muted', weekly ? 'Weekly use' : '5-hour use'), end);
       const track = el('div', 'track'), fill = el('div', weekly ? 'fill weekly-fill' : 'fill');
       fill.style.width = `${clamp((weekly ? tool.weeklyNum : tool.fiveUsedNum) / 100) * 100}%`;
       track.append(fill);
       group.append(label, track);
       if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit => {
-        const row = el('div', 'usage-label scoped-label'), end = el('span', 'usage-end');
-        if (limit.resets_at != null) end.append(el('span', 'reset-at', shortReset(limit.resets_at)));
-        end.append(el('span', 'mono', `${Math.round(limit.used_percent)}%`));
-        row.append(el('span', 'muted', `Weekly · ${limit.label}`), end);
-        const t = el('div', 'track scoped-track'), f = el('div', 'fill weekly-fill');
-        f.style.width = `${clamp(limit.used_percent / 100) * 100}%`;
-        t.append(f);
-        group.append(row, t);
+        const reset = limit.resets_at == null ? null : shortReset(limit.resets_at);
+        group.append(...scopedBar(`Weekly · ${limit.label}`, limit.used_percent, reset, true));
       });
-      if (weekly && (tool.limitsAt || tool.autoRefreshText)) {
-        const row = el('div', 'meta-row');
-        if (tool.limitsAt) row.append(text('span', 'weekly-reset', tool, 'limitsAt'));
-        if (tool.autoRefreshText) {
-          const box = popover(tool, 'auto-refresh', 'auto-ic'), summary = el('summary');
-          const every = tool.autoRefreshText.replace(/^auto-refresh /, '');
-          summary.setAttribute('data-key', `${tool.name}:auto-refresh-info`);
-          summary.setAttribute('aria-label', `Auto-refresh on, ${every}`);
-          summary.setAttribute('title', `Auto-refresh on · ${every}`);
-          summary.append(icon('cycle'));
-          const pop = el('div', 'popover-surface info-pop');
-          pop.append(el('strong', '', 'Auto-refresh on'), el('span', 'muted', `Usage is read ${every}, without sending a message.`));
-          box.append(summary, pop);
-          row.append(box);
-        }
-        group.append(row);
+      if (weekly && tool.thirdParty && tool.thirdParty.mode !== 'hide' && tool.thirdPartyQuota) {
+        const tp = tool.thirdParty, quota = tool.thirdPartyQuota;
+        const five = tp.window_open ? (quota.five_hour ?? tp.five_hour) : quota.five_hour;
+        const weeklyReset = quota.weekly ? shortReset(quota.weekly.resets_at) : null;
+        group.append(
+          ...scopedBar('5-hour · Claude & GPT', five?.used_percent ?? (quota.five_hour_synthetic ? 0 : null),
+            tp.window_open ? `ends ${clock(tp.five_hour.resets_at)}` : 'window closed', false),
+          ...scopedBar('Weekly · Claude & GPT', quota.weekly?.used_percent ?? (quota.weekly_synthetic ? 0 : null), weeklyReset, true)
+        );
       }
       return group;
+    }
+    function scopedBar(label, used, reset, weekly) {
+      const row = el('div', 'usage-label scoped-label'), end = el('span', 'usage-end');
+      if (reset) end.append(el('span', 'reset-at', reset));
+      end.append(el('span', 'mono', used == null ? '—' : `${Math.round(used)}%`));
+      row.append(el('span', 'muted', label), end);
+      const track = el('div', 'track scoped-track'), fill = el('div', weekly ? 'fill weekly-fill' : 'fill');
+      fill.setAttribute('style', `width: ${clamp((used ?? 0) / 100) * 100}%`);
+      track.append(fill);
+      return [row, track];
     }
 
     render();
