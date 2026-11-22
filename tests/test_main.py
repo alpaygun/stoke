@@ -23,6 +23,19 @@ def test_build_app_wires_enabled_tools_in_order(settings_factory: Callable[..., 
         assert not any(tool["running"] for tool in state["tools"].values())
 
 
+def test_antigravity_dry_run_state_api(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory(STOKE_TOOLS="claude,codex,antigravity", STOKE_TOOL_DELAYS="antigravity=30")
+    with TestClient(main.build_app(settings)) as client:
+        response = client.get("/api/state")
+    assert response.status_code == 200
+    state = response.json()
+    assert state["dry_run"] and list(state["tools"]) == ["claude", "codex", "antigravity"]
+    tool = state["tools"]["antigravity"]
+    assert tool["refreshable"] is True and tool["quota_groups"] == [] and tool["pending_verify"] is None
+    assert tool["delay_seconds"] == 30 and tool["auth"] == {"shared": {"label": "Account login"}}
+    assert tool["reset_closes_window"] is False
+
+
 def test_run_uses_settings_and_stdout_logging(
     settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -4,6 +4,7 @@ from typing import Protocol
 
 from ..config import Settings
 from ..runner import Runner, run_command
+from .antigravity import AntigravityProvider
 from .base import Provider
 from .claude import ClaudeProvider
 from .codex import CodexProvider
@@ -22,6 +23,7 @@ class ProviderFactory(Protocol):
 FACTORIES: dict[str, tuple[str, ProviderFactory]] = {
     "claude": ("Claude", ClaudeProvider),
     "codex": ("Codex", CodexProvider),
+    "antigravity": ("Antigravity", AntigravityProvider),
 }
 
 

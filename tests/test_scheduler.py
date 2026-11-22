@@ -12,8 +12,8 @@ import pytest
 
 from conftest import FakeProvider, FakeReader
 from stoke.config import Settings
-from stoke.models import ReadRecord, LimitsSnapshot, Plan, PlanOutcome, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, StokeResult, ToolState, Window
-from stoke.providers.base import LimitsUnreadable, ProviderError
+from stoke.models import ReadRecord, LimitsSnapshot, PendingVerify, Plan, PlanOutcome, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, StokeResult, ToolState, Window
+from stoke.providers.base import LimitsUnreadable, ProviderError, StokeUnverified
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
 from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, PlanUnreachable, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
@@ -1533,3 +1533,300 @@ def test_inflight_attempt_does_not_close_a_replacement_plan(
         else:
             assert state.plan == pending and state.plan_outcome is None and not state.auto_stoke
     asyncio.run(scenario())
+
+
+class FakeVerifier(FakeProvider):
+    """A stoke provider with a separately controlled confirming read."""
+
+    def __init__(self, *outcomes: StokeResult | Exception, delivered: bool = True) -> None:
+        super().__init__(result=StokeUnverified("prompt sent; usage unverified", delivered=delivered))
+        self.verify_outcomes = iter(outcomes)
+        self.verify_calls: list[bool] = []
+        self.verified = asyncio.Event()
+
+    async def verify_stoke(self, delivered: bool) -> StokeResult:
+        self.verify_calls.append(delivered)
+        self.verified.set()
+        outcome = next(self.verify_outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.mark.parametrize("delivered", [True, False])
+@pytest.mark.parametrize("end,closed_at", [(1000, None), (17000, 1000)])
+def test_unverified_prompt_backs_off_then_manual_read_uses_original_timing(
+    delivered: bool, end: int, closed_at: int | None,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+    scoped = [ScopedLimit("Argon", 10, 700000)]
+    groups = [QuotaGroup("third_party", Window(1, 15000, 300), None)]
+    provider = FakeVerifier(StokeResult(Window(2, 15400, 300), None, 12, scoped, groups), delivered=delivered)
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour, state.window_closed_at = Window(25, end, 300), closed_at
+
+    async def scenario() -> None:
+        await scheduler.stoke_now("claude", "auto")
+        assert state.pending_verify == PendingVerify(1000, delivered)
+        assert state.last_stoke is not None and not state.last_stoke.ok
+        assert state.last_stoke.error == "prompt sent; usage unverified"
+        assert state.consecutive_failures == 1 and state.next_stoke_at == 1060
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"].pending_verify == state.pending_verify
+
+        scheduler.set_auto("claude", False)
+        assert state.pending_verify == PendingVerify(1000, delivered)
+        now[0] = 1960
+        await scheduler.stoke_now("claude", "manual")
+        assert state.pending_verify is None and state.next_stoke_at is None
+        assert state.last_stoke == StokeRecord(1000, "manual", True, None, True, 12)
+        assert state.limits_at == 1960 and state.consecutive_failures == 0
+        assert state.scoped_limits == scoped and state.quota_groups == groups
+
+    asyncio.run(scenario())
+    assert provider.calls == 1 and provider.verify_calls == [delivered]
+    failed, succeeded = scheduler.cycles.read(now[0])
+    assert (failed["ok"], failed["attempt_at"], failed["completed_at"], failed["error"]) == (
+        False, 1000, 1000, "prompt sent; usage unverified",
+    )
+    assert (succeeded["ok"], succeeded["attempt_at"], succeeded["completed_at"], succeeded["opened"]) == (
+        True, 1000, 1960, True,
+    )
+
+
+def test_unverified_prompt_during_known_open_window_retries_with_new_prompt(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+    provider = FakeVerifier()
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour = Window(25, 1050, 300)
+
+    async def scenario() -> None:
+        provider.release = asyncio.Event()
+        attempt = asyncio.create_task(scheduler.stoke_now("claude", "manual"))
+        await provider.started.wait()
+        now[0] = 1050
+        provider.release.set()
+        await attempt
+        assert state.pending_verify is None
+        assert state.last_stoke is not None and not state.last_stoke.ok
+        assert state.last_stoke.error == "prompt sent; usage unverified"
+        assert state.consecutive_failures == 1 and state.next_stoke_at == 1110
+        assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"].pending_verify is None
+
+        now[0] = state.next_stoke_at
+        provider.result = StokeResult(Window(2, 19000, 300), None, 12)
+        await scheduler.stoke_now("claude", "auto")
+        assert state.last_stoke is not None and state.last_stoke.ok
+        assert provider.calls == 2 and provider.verify_calls == []
+
+    asyncio.run(scenario())
+
+
+def test_three_inconclusive_reads_then_new_prompt(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeVerifier(*(StokeUnverified("unverified", delivered=True) for _ in range(3)))
+    scheduler = make_scheduler(settings_factory(STOKE_AUTO_DEFAULT="1"), provider)
+    state = scheduler.states["claude"]
+
+    async def scenario() -> None:
+        await scheduler.stoke_now("claude", "auto")
+        for count, delay in enumerate((300, 900, 1800), 1):
+            assert state.next_stoke_at is not None
+            now[0] = state.next_stoke_at
+            await scheduler.stoke_now("claude", "auto")
+            assert state.consecutive_failures == count + 1 and state.next_stoke_at == now[0] + delay
+            assert state.pending_verify == (PendingVerify(1000, True, count) if count < 3 else None)
+        assert provider.calls == 1 and provider.verify_calls == [True, True, True]
+        provider.result = StokeResult(Window(2, 19000, 300), None, 12)
+        await scheduler.stoke_now("claude", "auto")
+        assert state.last_stoke is not None and state.last_stoke.ok and provider.calls == 2
+
+    asyncio.run(scenario())
+    assert "tool=claude stoke verification gave up; next attempt sends a new prompt" in caplog.text
+
+
+@pytest.mark.parametrize("outcome,error", [
+    (ProviderError("not delivered"), "not delivered"),
+    (LimitsUnreadable("unreadable"), "limits unreadable"),
+    (RuntimeError("private detail"), "unexpected provider error"),
+    (StokeResult(Window(2, 1000, 300), None, 12), "reset time not in the future"),
+])
+def test_terminal_verification_failure_clears_pending(
+    outcome: StokeResult | Exception, error: str, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeVerifier(outcome)
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.pending_verify = PendingVerify(930, False, 1)
+    asyncio.run(scheduler.stoke_now("claude", "manual"))
+    assert provider.verify_calls == [False] and provider.calls == 0
+    assert state.pending_verify is None
+    assert state.last_stoke is not None
+    assert (state.last_stoke.at, state.last_stoke.ok, state.last_stoke.error) == (930, False, error)
+
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_restart_reconciles_persisted_pending_when_auto_is_enabled(
+    auto: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+
+    async def scenario() -> None:
+        settings = settings_factory()
+        provider = FakeVerifier(StokeResult(Window(2, 18000, 300), None, 12))
+        scheduler = make_scheduler(settings, provider)
+        initial = scheduler.states["claude"]
+        initial.five_hour = Window(10, 12000, 300)
+        initial.next_stoke_at = 5000
+        initial.pending_verify = PendingVerify(900, False, 1)
+        initial.auto_stoke = auto
+        save(scheduler.path, scheduler.states)
+
+        restarted = make_scheduler(settings, provider)
+        state = restarted.states["claude"]
+        assert state.pending_verify == initial.pending_verify
+        assert startup_decision(state, 1000, settings) == "stoke_now"
+        await restarted.start()
+        try:
+            if auto:
+                await asyncio.wait_for(provider.verified.wait(), 1)
+                assert state.last_stoke is not None and state.last_stoke.trigger == "startup"
+            else:
+                await asyncio.sleep(0)
+                assert not provider.verify_calls and state.next_stoke_at is None
+                assert state.pending_verify == initial.pending_verify
+                await restarted.stoke_now("claude", "manual")
+            assert provider.verify_calls == [False] and provider.calls == 0
+            assert state.pending_verify is None
+        finally:
+            await restarted.stop()
+
+    asyncio.run(scenario())
+
+
+def test_pending_with_no_verifier_clears_and_sends_new_prompt(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeProvider()
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.pending_verify = PendingVerify(800, True, 2)
+    state.scoped_limits = [ScopedLimit("Argon", 5, 8000)]
+    state.quota_groups = [QuotaGroup("third_party", None, None)]
+    save(scheduler.path, scheduler.states)
+    scheduler = make_scheduler(scheduler.settings, provider)
+    state = asyncio.run(scheduler.stoke_now("claude", "manual"))
+    assert provider.calls == 1 and state.pending_verify is None
+    assert state.last_stoke is not None and state.last_stoke.at == 1000 and state.last_stoke.ok
+    assert state.scoped_limits == [ScopedLimit("Argon", 5, 8000)]
+    assert state.quota_groups == [QuotaGroup("third_party", None, None)]
+
+    provider.result = StokeResult(Window(3, 19100, 300), None, 7, scoped=[], groups=[])
+    asyncio.run(scheduler.stoke_now("claude", "manual"))
+    assert state.scoped_limits == state.quota_groups == []
+
+
+def test_pending_manual_attempt_obeys_plan_quiet_zone(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 1000)
+    provider = FakeVerifier(StokeResult(Window(2, 18000, 300), None, 12))
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.pending_verify, state.plan = PendingVerify(900, True), Plan("04:00", "once", None, 3600, None)
+    with pytest.raises(PlanConflict):
+        asyncio.run(scheduler.stoke_now("claude", "manual"))
+    assert not provider.verify_calls and state.pending_verify == PendingVerify(900, True)
+    asyncio.run(scheduler.stoke_now("claude", "manual", break_plan=True))
+    assert provider.verify_calls == [True] and provider.calls == 0
+    assert state.plan_outcome == PlanOutcome(3600, "broken", 1000)
+
+
+@pytest.mark.parametrize("weekly_synthetic", [True, False])
+def test_refresh_applies_groups_and_detects_weekly_reset_only_with_real_value(
+    weekly_synthetic: bool, settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 2000)
+    provider = FakeReader("claude")
+    scheduler = make_scheduler(settings_factory(), provider)
+    state = scheduler.states["claude"]
+    state.limits_at = 1000
+    old_week, new_week = Window(70, 100000, 10080), Window(0, 700000, 10080)
+    state.weekly = old_week
+    groups = [QuotaGroup("third_party", None, Window(4, 100000, 10080))]
+    provider.read_result = LimitsSnapshot(
+        Window(5, 9000, 300), new_week, None, observed_at=2000, groups=groups, weekly_synthetic=weekly_synthetic,
+    )
+    asyncio.run(scheduler.refresh_limits("claude"))
+    assert state.weekly == (old_week if weekly_synthetic else new_week)
+    assert len(state.weekly_resets) == (0 if weekly_synthetic else 1)
+    assert state.quota_groups == groups
+    provider.read_result = replace(provider.read_result, observed_at=1999, groups=[])
+    asyncio.run(scheduler.refresh_limits("claude"))
+    assert state.quota_groups == groups
+    provider.read_result = replace(provider.read_result, observed_at=2000, groups=[])
+    asyncio.run(scheduler.refresh_limits("claude"))
+    assert state.quota_groups == []
+
+
+@pytest.mark.parametrize("has_pending", [True, False])
+@pytest.mark.parametrize("old_end,end,confirmed,running,auto,adopted", [
+    (1500, 18000, True, False, True, True),
+    (None, 18000, True, False, True, True),
+    (2000, 18000, True, False, False, True),
+    (2100, 18000, True, False, True, False),
+    (1500, 18000, False, False, True, False),
+    (1500, 18000, True, True, True, False),
+    (1500, 2000, True, False, True, False),
+])
+def test_refresh_adopts_only_an_idle_confirmed_future_window_without_an_open_stored_one(
+    old_end: int | None, end: int, confirmed: bool, running: bool, auto: bool, adopted: bool, has_pending: bool,
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("stoke.clock.now", lambda: 2000)
+    caplog.set_level("INFO", logger="stoke.scheduler")
+    provider = FakeReader("claude")
+    scheduler = make_scheduler(settings_factory(STOKE_TOOL_DELAYS="claude=30"), provider)
+    state = scheduler.states["claude"]
+    state.five_hour = None if old_end is None else Window(5, old_end, 300)
+    state.window_closed_at = 900
+    state.next_stoke_at = 2400 if auto else None
+    state.auto_stoke = auto
+    pending = PendingVerify(1600, True, 1) if has_pending else None
+    state.pending_verify = pending
+    provider.read_result = LimitsSnapshot(Window(4, end, 300), None, None, window_confirmed=confirmed)
+
+    async def scenario() -> None:
+        provider.read_release = asyncio.Event()
+        refresh = asyncio.create_task(scheduler.refresh_limits("claude"))
+        await provider.read_started.wait()
+        state.running = running
+        provider.read_release.set()
+        await refresh
+
+    asyncio.run(scenario())
+    expected_window = Window(4, end, 300) if adopted else None if old_end is None else Window(4, old_end, 300)
+    assert state.five_hour == expected_window
+    assert state.window_closed_at == (None if adopted else 900)
+    assert state.next_stoke_at == (end + 30 if adopted and auto else 2400 if auto else None)
+    assert scheduler.events["claude"].is_set() is (adopted and auto)
+    expected_pending = None if adopted else pending
+    assert state.pending_verify == expected_pending
+    assert load(scheduler.path, scheduler.settings, scheduler.providers)["claude"].pending_verify == expected_pending
+    adoption_logs = [record.getMessage() for record in caplog.records
+                     if record.getMessage().startswith("tool=claude read confirmed an open window resets_at=")]
+    assert len(adoption_logs) == int(adopted)
+    if adopted:
+        assert adoption_logs[0].endswith(" pending cleared") is has_pending

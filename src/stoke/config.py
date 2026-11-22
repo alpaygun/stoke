@@ -10,6 +10,8 @@ from types import MappingProxyType
 from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+_ANTIGRAVITY_HOME = Path(".gemini") / "antigravity-cli"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -35,6 +37,7 @@ class Settings:
     access_team_domain: str = ""
     access_aud: str = ""
     claude_cli_version: str = ""
+    antigravity_dir: Path = Path("/home/stoke") / _ANTIGRAVITY_HOME
 
     @property
     def access_enabled(self) -> bool:
@@ -192,4 +195,5 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         access_team_domain=access_team_domain,
         access_aud=access_aud,
         claude_cli_version=cli_version,
+        antigravity_dir=Path(env.get("HOME", "/home/stoke")) / _ANTIGRAVITY_HOME,
     )

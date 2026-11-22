@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, READ_MODES, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
+from .models import AutoRefresh, PendingVerify, QuotaGroup, READ_MODES, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,33 @@ def _scoped_limits(value: Any) -> list[ScopedLimit]:
     return entries
 
 
+def _quota_groups(value: Any) -> list[QuotaGroup]:
+    groups = []
+    for entry in value if isinstance(value, list) else []:
+        if not isinstance(entry, dict) or entry.get("key") != "third_party":
+            continue
+        try:
+            group = QuotaGroup(entry["key"], _window(entry["five_hour"]), _window(entry["weekly"]))
+        except (ValueError, KeyError, TypeError, OverflowError):
+            continue
+        groups.append(group)
+        if len(groups) >= 3:
+            break
+    return groups
+
+
+def _pending_verify(value: Any) -> PendingVerify | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        attempt_at = _int(value.get("attempt_at"))
+        delivered = _bool(value.get("delivered"))
+        reads = _int(value.get("reads"))
+    except ValueError:
+        return None
+    return PendingVerify(attempt_at, delivered, reads) if reads <= 3 else None
+
+
 def _weekly_resets(value: Any) -> list[WeeklyReset]:
     if not isinstance(value, list):
         raise ValueError("invalid weekly resets")
@@ -218,6 +245,8 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 scoped_limits=_scoped_limits(item.get("scoped_limits")),
                 show_scoped=show_scoped if isinstance(show_scoped, bool) else True,
                 plan_name=item.get("plan_name") if isinstance(item.get("plan_name"), str) else None,
+                quota_groups=_quota_groups(item.get("quota_groups")),
+                pending_verify=_pending_verify(item.get("pending_verify")),
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
