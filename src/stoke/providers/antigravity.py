@@ -11,12 +11,13 @@ from typing import Any, Callable
 
 from .. import clock
 from ..config import Settings
-from ..models import LimitsSnapshot, QuotaGroup, ScopedLimit, StokeResult, Window
+from ..models import GroupStokeResult, LimitsSnapshot, QuotaGroup, ScopedLimit, StokeResult, Window, group_window_confirmed, third_party_quota
 from ..runner import CommandResult, Runner, run_command
-from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, iso_epoch, json_objects
+from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeNotDelivered, StokeSignedOut, StokeUnverified, iso_epoch, json_objects
 
 logger = logging.getLogger(__name__)
 STOKE_MODEL = "gemini-3.8-flash-low"
+THIRD_PARTY_MODEL = "gpt-oss-120b-medium"
 _AUTH_ERROR = "authentication failed or timed out"
 _CHILD_ENV = (
     "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -29,9 +30,9 @@ def _usage_argv(log_file: Path) -> tuple[str, ...]:
     return ("agy", "--output-format", "json", "--log-file", str(log_file), "-p", "/usage")
 
 
-def _prompt_argv(log_file: Path) -> tuple[str, ...]:
+def _prompt_argv(log_file: Path, model: str) -> tuple[str, ...]:
     return (
-        "agy", "--model", STOKE_MODEL, "--output-format", "json", "--disable-slash-commands",
+        "agy", "--model", model, "--output-format", "json", "--disable-slash-commands",
         "--log-file", str(log_file), "-p", "hi",
     )
 
@@ -109,6 +110,7 @@ def parse_usage(text: str, observed_at: int) -> LimitsSnapshot:
     if third_hour is not None or third_week is not None:
         groups.append(QuotaGroup(
             "third_party", None if third_hour_synthetic else third_hour, None if third_week_synthetic else third_week,
+            third_hour_synthetic, third_week_synthetic,
         ))
     return LimitsSnapshot(
         five_hour, weekly, None, observed_at=observed_at, scoped=scoped, groups=groups,
@@ -125,6 +127,8 @@ class AntigravityProvider:
     reset_closes_window = False
     reset_credits: bool = False
     read_modes: bool = False
+    serial_cli = True
+    third_party_group = True
     auth_labels = {"shared": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command) -> None:
@@ -205,12 +209,16 @@ class AntigravityProvider:
 
     async def stoke(self) -> StokeResult:
         """Send the fixed prompt and confirm its window with a usage read."""
+        delivered, duration = await self._send_prompt(STOKE_MODEL)
+        return await self._confirm_stoke(delivered, prompt_duration=duration)
+
+    async def _send_prompt(self, model: str) -> tuple[bool, int]:
         if not self._signed_in():
             raise StokeSignedOut("Antigravity signed out")
         delivered = False
         conversation_id = None
         try:
-            result = await self._run(_prompt_argv, self.settings.timeout_seconds)
+            result = await self._run(lambda log_file: _prompt_argv(log_file, model), self.settings.timeout_seconds)
             payload = _json_object(result.stdout)
             if payload is not None:
                 conversation_id = payload.get("conversation_id")
@@ -220,10 +228,11 @@ class AntigravityProvider:
                     if status == "ERROR":
                         if payload.get("error") == _AUTH_ERROR:
                             raise StokeSignedOut("Antigravity signed out")
-                        raise ProviderError("Antigravity prompt failed")
+                        if model == STOKE_MODEL:
+                            raise ProviderError("Antigravity prompt failed")
         finally:
             self._cleanup(conversation_id, delivered)
-        return await self._confirm_stoke(delivered, prompt_duration=result.duration_ms)
+        return delivered, result.duration_ms
 
     async def verify_stoke(self, delivered: bool) -> StokeResult:
         """Reconcile a prior prompt with a usage read alone."""
@@ -237,8 +246,36 @@ class AntigravityProvider:
         if snapshot.window_confirmed and snapshot.five_hour.resets_at > clock.now():
             return StokeResult(
                 snapshot.five_hour, snapshot.weekly, read_duration if prompt_duration is None else prompt_duration,
-                scoped=snapshot.scoped, groups=snapshot.groups,
+                scoped=snapshot.scoped, groups=snapshot.groups, snapshot=snapshot,
             )
         if delivered:
-            raise StokeUnverified("prompt sent; usage unverified", delivered=True)
-        raise ProviderError("Antigravity prompt not delivered")
+            raise StokeUnverified("prompt sent; usage unverified", delivered=True, snapshot=snapshot)
+        raise StokeNotDelivered("Antigravity prompt not delivered", snapshot=snapshot)
+
+    async def stoke_third_party(self) -> GroupStokeResult:
+        """Send the fixed GPT-OSS prompt and confirm the 3p window."""
+        delivered, duration = await self._send_prompt(THIRD_PARTY_MODEL)
+        return await self._confirm_third_party(delivered, prompt_duration=duration)
+
+    async def verify_third_party(self, delivered: bool) -> GroupStokeResult:
+        """Confirm the 3p window with a usage read alone."""
+        return await self._confirm_third_party(delivered)
+
+    async def _confirm_third_party(
+        self, delivered: bool, *, prompt_duration: int | None = None,
+    ) -> GroupStokeResult:
+        try:
+            snapshot, read_duration = await self._read_usage()
+        except ReaderSignedOut:
+            raise
+        except ProviderError:
+            raise StokeUnverified("prompt sent; usage unverified", delivered=delivered) from None
+        group = third_party_quota(snapshot.groups)
+        if group is not None and group_window_confirmed(group, clock.now()):
+            assert group.five_hour is not None
+            duration = read_duration if prompt_duration is None else prompt_duration
+            return GroupStokeResult(snapshot, group.five_hour, duration)
+        missing = group is None or (group.five_hour is None and not group.five_hour_synthetic)
+        if missing or delivered:
+            raise StokeUnverified("prompt sent; usage unverified", delivered=True, snapshot=snapshot)
+        raise StokeNotDelivered("Antigravity prompt not delivered", snapshot=snapshot)

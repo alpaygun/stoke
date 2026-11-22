@@ -732,7 +732,7 @@ def test_antigravity_registry_and_dry_run_details(
         assert not snapshot.window_confirmed
         if name == "antigravity":
             assert snapshot.groups == result.groups == [QuotaGroup(
-                "third_party", Window(2, now + 4 * 3600, 300), Window(1, now + 6 * 86400, 10080),
+                "third_party", None, None, five_hour_synthetic=True, weekly_synthetic=True,
             )]
             assert snapshot.scoped == result.scoped == [ScopedLimit("Argon", 9, now + 6 * 86400)]
             assert snapshot.resets is snapshot.plan_name is None

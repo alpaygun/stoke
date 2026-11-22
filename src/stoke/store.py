@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from .config import Settings
-from .models import AutoRefresh, PendingVerify, QuotaGroup, READ_MODES, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
+from .models import THIRD_PARTY_MODES, AutoRefresh, PendingVerify, QuotaGroup, READ_MODES, Plan, PlanOutcome, ReadRecord, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ThirdPartyState, ToolState, WeeklyReset, Window, sanitize_reset_title, serialize_tool, validate_plan
 from .providers.base import Provider, short_error
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,10 @@ def _quota_groups(value: Any) -> list[QuotaGroup]:
         if not isinstance(entry, dict) or entry.get("key") != "third_party":
             continue
         try:
-            group = QuotaGroup(entry["key"], _window(entry["five_hour"]), _window(entry["weekly"]))
+            group = QuotaGroup(
+                entry["key"], _window(entry["five_hour"]), _window(entry["weekly"]),
+                entry.get("five_hour_synthetic") is True, entry.get("weekly_synthetic") is True,
+            )
         except (ValueError, KeyError, TypeError, OverflowError):
             continue
         groups.append(group)
@@ -178,6 +181,32 @@ def _pending_verify(value: Any) -> PendingVerify | None:
     except ValueError:
         return None
     return PendingVerify(attempt_at, delivered, reads) if reads <= 3 else None
+
+
+def _third_party(value: Any) -> ThirdPartyState:
+    """Treat optional 3p state independently of the rest of the state file."""
+    if not isinstance(value, dict):
+        return ThirdPartyState()
+    mode = value.get("mode")
+    warning = value.get("warning")
+    reason = value.get("warning_reason")
+    next_at = value.get("next_stoke_at")
+    pending = _pending_verify(value.get("pending_verify"))
+    try:
+        if value.get("pending_verify") is not None and pending is None:
+            raise ValueError("invalid pending verification")
+        return ThirdPartyState(
+            mode=mode if mode in THIRD_PARTY_MODES else "show",
+            five_hour=_window(value.get("five_hour")),
+            next_stoke_at=None if next_at is None else _int(next_at),
+            last_stoke=_record(value.get("last_stoke")),
+            consecutive_failures=_int(value.get("consecutive_failures", 0)),
+            pending_verify=pending,
+            warning=warning if warning in ("signed_out", "did_not_open_window", "limits_unreadable", "stoke_failing") else None,
+            warning_reason=reason if reason in ("did_not_open_window", "limits_unreadable") else None,
+        )
+    except (ValueError, KeyError, TypeError, OverflowError):
+        return ThirdPartyState()
 
 
 def _weekly_resets(value: Any) -> list[WeeklyReset]:
@@ -205,7 +234,10 @@ def _weekly_resets(value: Any) -> list[WeeklyReset]:
 def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[str, ToolState]:
     """Load enabled tools, falling back to defaults for missing or corrupt data."""
     defaults = {
-        name: ToolState(name, provider.label, settings.auto_default, False, None, None, None, None, 0, None)
+        name: ToolState(
+            name, provider.label, settings.auto_default, False, None, None, None, None, 0, None,
+            third_party=ThirdPartyState() if getattr(provider, "third_party_group", False) else None,
+        )
         for name, provider in tools.items()
     }
     try:
@@ -247,6 +279,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 plan_name=item.get("plan_name") if isinstance(item.get("plan_name"), str) else None,
                 quota_groups=_quota_groups(item.get("quota_groups")),
                 pending_verify=_pending_verify(item.get("pending_verify")),
+                third_party=_third_party(item.get("third_party")) if default.third_party is not None else None,
             )
         return states
     except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError):

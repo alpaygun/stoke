@@ -8,7 +8,7 @@ from .antigravity import AntigravityProvider
 from .base import Provider
 from .claude import ClaudeProvider
 from .codex import CodexProvider
-from .dryrun import DryRunProvider, DryRunReader
+from .dryrun import DryRunAntigravity, DryRunProvider, DryRunReader
 
 
 class ProviderFactory(Protocol):
@@ -34,13 +34,19 @@ def create_providers(settings: Settings, runner: Runner = run_command) -> dict[s
     providers: dict[str, Provider] = {}
     for name in settings.tools:
         label, factory = FACTORIES[name]
-        dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
+        third_party_group = getattr(factory, "third_party_group", False)
+        if third_party_group:
+            dry_factory = DryRunAntigravity
+        else:
+            dry_factory = DryRunReader if hasattr(factory, "read_limits") else DryRunProvider
         providers[name] = (
             dry_factory(name, label, settings,
                         reset_closes_window=factory.reset_closes_window,
                         reset_credits=factory.reset_credits, read_modes=factory.read_modes,
                         auth_labels=factory.auth_labels,
-                        read_login_expiry=hasattr(factory, "read_login_expires_at"))
+                        read_login_expiry=hasattr(factory, "read_login_expires_at"),
+                        serial_cli=getattr(factory, "serial_cli", False),
+                        third_party_group=third_party_group)
             if settings.dry_run else factory(settings, runner)
         )
     return providers

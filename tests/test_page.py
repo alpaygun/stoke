@@ -195,7 +195,7 @@ def test_early_reset_settings_stepper_and_save_order() -> None:
     _, body, _ = form["children"]
     boxes = body["children"]
     assert boxes.index(page.by_id["ss-box"]) == boxes.index(page.by_id["ar-box"]) + 1
-    assert boxes.index(page.by_id["rm-box"]) == boxes.index(page.by_id["ss-box"]) + 1
+    assert boxes.index(page.by_id["rm-box"]) == boxes.index(page.by_id["tp-caution"]) + 1
     assert boxes.index(page.by_id["rh-box"]) == boxes.index(page.by_id["rm-box"]) + 1
     box = page.by_id["rh-box"]
     assert box["attrs"]["class"] == "settings-box"
@@ -217,7 +217,7 @@ def test_early_reset_settings_stepper_and_save_order() -> None:
         assert page.by_id[control]["attrs"]["type"] == "button"
         assert page.by_id[control]["attrs"]["data-settings-icon"] == kind
     assert "rhBox.hidden = !(tool.refreshable && tool.reset_closes_window);" in PAGE
-    auto = PAGE.index("if (autoChanged) await post(name, 'auto', { enabled });")
+    auto = PAGE.index("if (autoChanged && enabled) await post(name, 'auto', { enabled });")
     refresh = PAGE.index("if (arChanged) await post(name, 'auto-refresh', body);")
     scoped = PAGE.index("if (ssChanged) await post(name, 'show-scoped', { enabled: ssEnabled.checked });")
     hold = PAGE.index("if (rhChanged) await post(name, 'reset-hold', { minutes });")
@@ -306,14 +306,17 @@ def test_weekly_and_scoped_reset_times_are_in_their_label_rows() -> None:
     assert weekly.index("el('span', 'usage-end')") < weekly.index(
         "if (tool.weeklyReset != null) end.append(text('span', 'reset-at', tool, 'weeklyReset'));"
     ) < weekly.index("end.append(usage);") < weekly.index("label.append(end);") < weekly.index("group.append(label, track);")
-    assert scoped.index("el('span', 'usage-end')") < scoped.index(
-        "if (limit.resets_at != null) end.append(el('span', 'reset-at', shortReset(limit.resets_at)));"
-    ) < scoped.index("end.append(el('span', 'mono',") < scoped.index(
-        "row.append(el('span', 'muted', `Weekly · ${limit.label}`), end);"
-    ) < scoped.index("group.append(row, t);")
+    assert "const reset = limit.resets_at == null ? null : shortReset(limit.resets_at);" in scoped
+    call = "group.append(...scopedBar(`Weekly · ${limit.label}`, limit.used_percent, reset, true));"
+    bar = re.search(r"function scopedBar\(label, used, reset, weekly\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert bar and bar[1].index("el('span', 'usage-end')") < bar[1].index(
+        "if (reset) end.append(el('span', 'reset-at', reset));"
+    ) < bar[1].index("end.append(el('span', 'mono',") < bar[1].index(
+        "row.append(el('span', 'muted', label), end);"
+    )
     assert code.count("'weekly-reset'") == 1
     assert "row.append(text('span', 'weekly-reset', tool, 'limitsAt'));" in scoped
-    assert scoped.index("group.append(row, t);") < scoped.index("el('div', 'meta-row')")
+    assert scoped.index(call) < scoped.index("el('div', 'meta-row')")
     assert scoped.rstrip().endswith("group.append(row);\n      }\n      return group;")
     assert ".scoped-label { margin-top: 12px; }" in PAGE
     assert ".track + .weekly-reset" not in PAGE
@@ -380,7 +383,7 @@ def test_read_method_settings_and_refresh_interval_bounds() -> None:
     assert "r.value === (tool.read_mode ?? 'direct')" in PAGE
     assert "r.disabled = settingsSaving || rmBox.hidden" in PAGE
     assert "const rmChanged = !rmBox.hidden && tool.capabilities?.read_modes !== false && mode !== tool.read_mode;" in PAGE
-    assert "!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged" in PAGE
+    assert "!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged && !tpChanged" in PAGE
     for hint in ("Asks the usage endpoint directly; falls back to the CLI if needed",
                  "Asks the official CLI only. Reset credits are not available", "Asks the official CLI only"):
         assert hint in PAGE
@@ -421,7 +424,7 @@ def test_plan_and_read_settings_cards_and_segmented_choices() -> None:
         ]
 
     groups = {}
-    for name, count in (("plan", 3), ("settings", 5)):
+    for name, count in (("plan", 3), ("settings", 6)):
         form, = page.by_id[f"{name}-dialog"]["children"]
         _, body, _ = form["children"]
         boxes = [node for node in body["children"] if node["attrs"].get("class") == "settings-box"]
@@ -447,15 +450,38 @@ def test_plan_and_read_settings_cards_and_segmented_choices() -> None:
                              ("plan-block", {"settings-caution", "danger"})):
         caution, = [node for node in plan_body["children"] if page.by_id[control] in node["children"]]
         assert set(caution["attrs"]["class"].split()) == classes
-    assert set(groups) == {"repeat", "auto_after", "read_mode"}
+    assert set(groups) == {"repeat", "auto_after", "read_mode", "third_party"}
     for name, values in (("repeat", ["once", "daily"]),
                          ("auto_after", ["keep", "on", "off"]),
-                         ("read_mode", ["direct", "cli"])):
+                         ("read_mode", ["direct", "cli"]),
+                         ("third_party", ["hide", "show", "keep_open"])):
         assert [radio["value"] for radio in groups[name]] == values
-        assert [radio["value"] for radio in groups[name] if "checked" in radio] == values[:1]
+        assert [radio["value"] for radio in groups[name] if "checked" in radio] == (["show"] if name == "third_party" else values[:1])
     assert page.by_id["plan-block"]["attrs"]["role"] == "status"
     assert "hidden" in page.by_id["plan-block"]["attrs"]
     assert "document.querySelectorAll('[data-settings-icon]')" in PAGE
+
+
+def test_third_party_panel_uses_approved_positions_and_deactivates_first() -> None:
+    page = ElementParser()
+    page.feed(PAGE)
+    form, = page.by_id["settings-dialog"]["children"]
+    _, body, _ = form["children"]
+    index = body["children"].index(page.by_id["ss-box"])
+    assert body["children"][index + 1:index + 3] == [page.by_id["tp-box"], page.by_id["tp-caution"]]
+    assert page.by_id["tp-caution"]["attrs"]["class"] == "settings-caution"
+    disable = PAGE.index("if (autoChanged && !enabled) await post(name, 'auto'")
+    mode = PAGE.index("if (tpChanged) await post(name, 'third-party'")
+    enable = PAGE.index("if (autoChanged && enabled) await post(name, 'auto'")
+    assert disable < mode < enable
+    assert "tpBox.hidden = !tool.capabilities?.third_party;" in PAGE
+    assert "tpCaution.hidden = tpBox.hidden || tpBox.querySelector('input:checked')?.value !== 'keep_open';" in PAGE
+    assert "tool.thirdParty.mode !== 'hide' && tool.thirdPartyQuota" in PAGE
+    assert PAGE.index("scopedBar('5-hour · Claude & GPT'") < PAGE.index("scopedBar('Weekly · Claude & GPT'")
+    assert PAGE.index("parts.push(planSection(tool))") < PAGE.index("parts.push(thirdPartySection(tool))")
+    assert "tool.hasWarning || tool.thirdPartyWarning" in PAGE
+    assert "'third-party-warning'" in PAGE
+    assert "No Gemini auto-stoke" in PAGE
 
 
 def test_toast_is_a_manual_popover_outside_app() -> None:

@@ -4,6 +4,8 @@ import asyncio
 import logging
 import time
 from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime, time as local_time, timedelta, timezone
 from pathlib import Path
@@ -14,8 +16,16 @@ from zoneinfo import ZoneInfo
 from . import clock, store
 from .config import Settings
 from .cycles import CycleLog, CycleRecord
-from .models import AutoRefresh, PendingVerify, READ_MODES, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
-from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, short_error
+from .models import (
+    READ_MODES, THIRD_PARTY_MODES, AutoRefresh, GroupStokeResult, LimitsSnapshot, PendingVerify, Plan,
+    PlanOutcome, PlanRepeat, PlanResult, QuotaGroup, ReadRecord, ResetCredit, ResetCredits, StokeRecord,
+    StokeResult, ThirdPartyMode, ThirdPartyState, ThirdPartyWarningReason, ToolState, WeeklyReset, Window,
+    group_window_confirmed, third_party_quota, validate_auto_refresh, validate_plan,
+)
+from .providers.base import (
+    LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, StokeNotDelivered,
+    StokeSignedOut, StokeUnverified, ThirdPartyStoker, short_error,
+)
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup", "planned", "reset"]
@@ -185,6 +195,18 @@ def compute_warning(state: ToolState) -> str | None:
     return None
 
 
+def third_party_warning(state: ThirdPartyState) -> str | None:
+    record = state.last_stoke
+    if record is not None:
+        if record.error == SIGNED_OUT_ERROR:
+            return "signed_out"
+        if record.opened_new_window is False:
+            return "did_not_open_window"
+    if state.warning_reason is not None:
+        return state.warning_reason
+    return "stoke_failing" if state.consecutive_failures >= 3 else None
+
+
 class Scheduler:
     """Own tool state, per-tool locks/events, and lifecycle-managed tasks."""
 
@@ -201,20 +223,37 @@ class Scheduler:
             if callable(getattr(provider, "read_limits", None))
         }
         self.states = states
+        for name, provider in providers.items():
+            if getattr(provider, "third_party_group", False):
+                if states[name].third_party is None:
+                    states[name].third_party = ThirdPartyState()
+            else:
+                states[name].third_party = None
         self.settings = settings
         self.path = path if path is not None else settings.data_dir / "state.json"
         self.cycles = CycleLog(settings.data_dir / "cycles.jsonl")
         self.locks = {name: asyncio.Lock() for name in providers}
+        self.cli_locks = {
+            name: asyncio.Lock() for name, provider in providers.items() if getattr(provider, "serial_cli", False)
+        }
         self.events = {name: asyncio.Event() for name in providers}
+        self.third_party_events = {name: asyncio.Event() for name, state in states.items() if state.third_party is not None}
         self.refresh_events = {name: asyncio.Event() for name in self.readers}
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self.third_party_tasks: dict[str, asyncio.Task[None]] = {}
         self._direct_retries: dict[str, asyncio.Task[None]] = {}
         self._attempts: set[asyncio.Task[object]] = set()
         self._startup_pending = {name: False for name in providers}
 
     def _persist(self) -> None:
         store.save(self.path, self.states)
+
+    def _wake(self, name: str) -> None:
+        self.events[name].set()
+        event = self.third_party_events.get(name)
+        if event is not None:
+            event.set()
 
     def _schedule_startup(self, name: str) -> None:
         state = self.states[name]
@@ -246,7 +285,7 @@ class Scheduler:
         return closed
 
     async def start(self) -> None:
-        """Initialize schedules and launch exactly one loop per tool."""
+        """Initialize schedules and launch the supported loops."""
         if self.tasks:
             return
         try:
@@ -262,21 +301,30 @@ class Scheduler:
                 self._schedule_startup(name)
             else:
                 state.next_stoke_at = None
+            if state.third_party is not None:
+                state.third_party.running = False
+                self._schedule_third_party(state, clock.now())
         self._persist()
         self.tasks = {name: asyncio.create_task(self._loop(name), name=f"stoke:{name}") for name in self.providers}
         self.refresh_tasks = {
             name: asyncio.create_task(self._refresh_loop(name), name=f"refresh:{name}") for name in self.readers
         }
+        self.third_party_tasks = {
+            name: asyncio.create_task(self._third_party_loop(name), name=f"stoke:{name}:third-party")
+            for name in self.third_party_events
+        }
 
     async def stop(self) -> None:
         """Cancel loops and manual attempts, and wait for their cleanup."""
-        tasks = set(self.tasks.values()) | set(self.refresh_tasks.values()) | self._attempts
+        tasks = set(self.tasks.values()) | set(self.refresh_tasks.values()) | set(self.third_party_tasks.values())
+        tasks.update(self._attempts)
         tasks.discard(asyncio.current_task())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
         self.refresh_tasks.clear()
+        self.third_party_tasks.clear()
 
     def can_refresh(self, name: str) -> bool:
         """Report the provider's optional read capability."""
@@ -355,7 +403,8 @@ class Scheduler:
         if name not in self.readers:
             raise RefreshUnsupported(name)
         state = self.states[name]
-        if state.refreshing or state.running:
+        cli_lock = self.cli_locks.get(name)
+        if state.refreshing or state.running or (cli_lock is not None and cli_lock.locked()):
             raise AlreadyRunning(name)
         state.refreshing = True
         task = asyncio.current_task()
@@ -363,7 +412,8 @@ class Scheduler:
             self._attempts.add(task)
         try:
             try:
-                snapshot = await self.readers[name].read_limits(state.read_mode)
+                async with cli_lock if cli_lock is not None else nullcontext():
+                    snapshot = await self.readers[name].read_limits(state.read_mode)
             except ProviderError as error:
                 signed_out = isinstance(error, ReaderSignedOut)
                 message = "usage reader signed out" if signed_out else short_error(str(error))
@@ -391,66 +441,7 @@ class Scheduler:
                 raise ProviderError("unexpected provider error") from None
             now = clock.now()
             state.last_read = ReadRecord(now, True, None, False)
-            observed = min(snapshot.observed_at, now) if snapshot.observed_at is not None else now
-            kept_window = False
-            if state.limits_at is None or observed >= state.limits_at:
-                window_reset = detect_window_reset(state.five_hour, snapshot.five_hour.used_percent, observed)
-                weekly_reset = False
-                if snapshot.weekly is not None and not snapshot.weekly_synthetic:
-                    weekly_reset = self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
-                    state.weekly = snapshot.weekly
-                if ((weekly_reset or window_reset) and state.window_closed_at is None
-                        and state.five_hour is not None and state.five_hour.resets_at > observed):
-                    if self.reset_closes_window[name]:
-                        state.window_closed_at = observed
-                        next_at = reset_next(state, now, self.settings)
-                        logger.info("tool=%s window reset detected decision=%s", name, "hold" if next_at > now else "now")
-                        if state.auto_stoke:
-                            state.next_stoke_at = next_at
-                            self.events[name].set()
-                    else:
-                        kept_window = True
-                if (snapshot.window_confirmed and not state.running and snapshot.five_hour.resets_at > observed
-                        and (state.five_hour is None or state.five_hour.resets_at <= observed)):
-                    state.five_hour = snapshot.five_hour
-                    state.window_closed_at = None
-                    pending_cleared = " pending cleared" if state.pending_verify is not None else ""
-                    state.pending_verify = None
-                    if state.auto_stoke:
-                        state.next_stoke_at = snapshot.five_hour.resets_at + self.settings.delay_for(name)
-                        self.events[name].set()
-                    try:
-                        resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
-                    except (OverflowError, OSError, ValueError):
-                        resets_at = "out-of-range"
-                    logger.info("tool=%s read confirmed an open window resets_at=%s%s", name, resets_at, pending_cleared)
-                elif state.five_hour is not None:
-                    state.five_hour = Window(
-                        snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
-                    )
-                state.limits_at = observed
-                if snapshot.scoped is not None:
-                    state.scoped_limits = snapshot.scoped
-                if snapshot.groups is not None:
-                    state.quota_groups = snapshot.groups
-                if snapshot.plan_name is not None:
-                    state.plan_name = snapshot.plan_name
-                if snapshot.resets is not None:
-                    for entry in state.weekly_resets:
-                        if entry.credits_before is not None:
-                            if _credit_used(entry.credits_before, snapshot.resets.credits, observed):
-                                entry.kind = "credit"
-                            entry.credits_before = None
-                    state.resets = replace(snapshot.resets, read_at=now)
-            if kept_window or state.window_closed_at is not None:
-                try:
-                    resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
-                except (OverflowError, OSError, ValueError):
-                    resets_at = "out-of-range"
-                if kept_window:
-                    logger.info("tool=%s reset detected, window kept read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
-                else:
-                    logger.info("tool=%s read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
+            self._apply_limits_observation(state, snapshot, now)
             self._persist()
             if (snapshot.direct_retry and not follow_up and state.read_mode == "direct"
                     and not state.auto_refresh.enabled):
@@ -460,6 +451,122 @@ class Scheduler:
             state.refreshing = False
             if task is not None:
                 self._attempts.discard(task)
+
+    def _apply_limits_observation(self, state: ToolState, snapshot: LimitsSnapshot, now: int) -> None:
+        """Apply accepted limits from any message-free usage snapshot."""
+        name = state.name
+        observed = min(snapshot.observed_at, now) if snapshot.observed_at is not None else now
+        kept_window = False
+        if state.limits_at is None or observed >= state.limits_at:
+            self._apply_group_observation(state, snapshot.groups, observed)
+            window_reset = detect_window_reset(state.five_hour, snapshot.five_hour.used_percent, observed)
+            weekly_reset = False
+            if snapshot.weekly is not None and not snapshot.weekly_synthetic:
+                weekly_reset = self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
+                state.weekly = snapshot.weekly
+            if ((weekly_reset or window_reset) and state.window_closed_at is None
+                    and state.five_hour is not None and state.five_hour.resets_at > observed):
+                if self.reset_closes_window[name]:
+                    state.window_closed_at = observed
+                    next_at = reset_next(state, now, self.settings)
+                    logger.info("tool=%s window reset detected decision=%s", name, "hold" if next_at > now else "now")
+                    if state.auto_stoke:
+                        state.next_stoke_at = next_at
+                        self._wake(name)
+                else:
+                    kept_window = True
+            if (snapshot.window_confirmed and not state.running and snapshot.five_hour.resets_at > observed
+                    and (state.five_hour is None or state.five_hour.resets_at <= observed)):
+                state.five_hour = snapshot.five_hour
+                state.window_closed_at = None
+                pending_cleared = " pending cleared" if state.pending_verify is not None else ""
+                state.pending_verify = None
+                if state.auto_stoke:
+                    state.next_stoke_at = snapshot.five_hour.resets_at + self.settings.delay_for(name)
+                    self._wake(name)
+                try:
+                    resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
+                except (OverflowError, OSError, ValueError):
+                    resets_at = "out-of-range"
+                logger.info("tool=%s read confirmed an open window resets_at=%s%s", name, resets_at, pending_cleared)
+            elif state.five_hour is not None:
+                state.five_hour = Window(
+                    snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
+                )
+            state.limits_at = observed
+            if snapshot.scoped is not None:
+                state.scoped_limits = snapshot.scoped
+            if snapshot.plan_name is not None:
+                state.plan_name = snapshot.plan_name
+            if snapshot.resets is not None:
+                for entry in state.weekly_resets:
+                    if entry.credits_before is not None:
+                        if _credit_used(entry.credits_before, snapshot.resets.credits, observed):
+                            entry.kind = "credit"
+                        entry.credits_before = None
+                state.resets = replace(snapshot.resets, read_at=now)
+        if kept_window or state.window_closed_at is not None:
+            try:
+                resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
+            except (OverflowError, OSError, ValueError):
+                resets_at = "out-of-range"
+            if kept_window:
+                logger.info("tool=%s reset detected, window kept read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
+            else:
+                logger.info("tool=%s read five_hour used=%s resets_at=%s", name, snapshot.five_hour.used_percent, resets_at)
+
+    def _apply_group_observation(self, state: ToolState, groups: list[QuotaGroup] | None, observed: int) -> None:
+        if groups is not None:
+            state.quota_groups = groups
+        tp = state.third_party
+        if tp is None:
+            return
+        group = third_party_quota(groups)
+        if group is not None and group.five_hour is not None and not group.five_hour_synthetic:
+            if (not tp.running and (tp.five_hour is None or tp.five_hour.resets_at <= observed)
+                    and group_window_confirmed(group, observed)):
+                self._adopt_third_party_window(state, tp, group.five_hour)
+            elif tp.five_hour is not None:
+                tp.five_hour = replace(tp.five_hour, used_percent=group.five_hour.used_percent)
+        self._wake(state.name)
+
+    def _adopt_third_party_window(self, state: ToolState, tp: ThirdPartyState, window: Window) -> None:
+        tp.five_hour = window
+        tp.pending_verify = None
+        tp.consecutive_failures = 0
+        tp.warning = tp.warning_reason = None
+        if tp.active(state.auto_stoke):
+            tp.next_stoke_at = window.resets_at + self.settings.delay_for(state.name)
+
+    def _known_third_party_window(self, state: ToolState, tp: ThirdPartyState, now: int) -> Window | None:
+        if tp.five_hour is not None and tp.five_hour.resets_at > now:
+            return tp.five_hour
+        group = third_party_quota(state.quota_groups)
+        if group is not None and group_window_confirmed(group, max(now, state.limits_at or now)):
+            assert group.five_hour is not None
+            self._adopt_third_party_window(state, tp, group.five_hour)
+            return group.five_hour
+        return None
+
+    def _schedule_third_party(self, state: ToolState, now: int) -> None:
+        tp = state.third_party
+        assert tp is not None
+        if not tp.active(state.auto_stoke):
+            tp.next_stoke_at = None
+            tp.warning = tp.warning_reason = None
+        elif not tp.running:
+            window = self._known_third_party_window(state, tp, now)
+            if tp.pending_verify is not None or window is None:
+                tp.next_stoke_at = now
+            else:
+                tp.next_stoke_at = window.resets_at + self.settings.delay_for(state.name)
+
+    def _set_auto_state(self, state: ToolState, enabled: bool, now: int) -> None:
+        changed = state.auto_stoke != enabled
+        state.auto_stoke = enabled
+        if changed and state.third_party is not None:
+            self._schedule_third_party(state, now)
+            self._wake(state.name)
 
     async def _refresh_loop(self, name: str) -> None:
         """Wait while disabled; wake on settings changes and back off failures."""
@@ -537,7 +644,7 @@ class Scheduler:
         if (state.window_closed_at is not None and state.auto_stoke and not state.running
                 and state.five_hour is not None and state.five_hour.resets_at > now):
             state.next_stoke_at = reset_next(state, now, self.settings)
-            self.events[name].set()
+            self._wake(name)
         self._persist()
         return state
 
@@ -546,7 +653,7 @@ class Scheduler:
         state = self.states[name]
         changed = state.auto_stoke != enabled
         state.stale_resets = 0
-        state.auto_stoke = enabled
+        self._set_auto_state(state, enabled, clock.now())
         state.warning = compute_warning(state)
         if not enabled:
             state.next_stoke_at = None
@@ -554,7 +661,22 @@ class Scheduler:
         elif changed:
             self._schedule_startup(name)
         self._persist()
-        self.events[name].set()
+        self._wake(name)
+        return state
+
+    def set_third_party(self, name: str, mode: ThirdPartyMode) -> ToolState:
+        """Persist the independent quota mode and reconsider its schedule."""
+        state = self.states[name]
+        tp = state.third_party
+        if tp is None:
+            raise ValueError("third-party quota not supported")
+        if mode not in THIRD_PARTY_MODES:
+            raise ValueError("mode must be hide, show or keep_open")
+        if tp.mode != mode:
+            tp.mode = mode
+            self._schedule_third_party(state, clock.now())
+        self._persist()
+        self._wake(name)
         return state
 
     def dismiss_weekly_reset(self, name: str, id: str) -> ToolState:
@@ -580,7 +702,7 @@ class Scheduler:
             raise PlanUnreachable(f"window open until {end}, so {time} cannot be reached")
         state.plan = Plan(time, repeat, auto_after, target, None)
         self._persist()
-        self.events[name].set()
+        self._wake(name)
         return state
 
     def cancel_plan(self, name: str) -> ToolState:
@@ -588,18 +710,38 @@ class Scheduler:
         state = self.states[name]
         state.plan = None
         self._persist()
-        self.events[name].set()
+        self._wake(name)
         return state
 
-    async def stoke_now(self, name: str, trigger: Trigger, *, break_plan: bool = False) -> ToolState:
-        """Complete one attempt, rejecting overlap without waiting for the lock."""
+    @asynccontextmanager
+    async def _main_attempt_lock(self, name: str) -> AsyncIterator[None]:
         lock = self.locks[name]
         if lock.locked():
             raise AlreadyRunning(name)
-        follow_up = False
+        cli_lock = self.cli_locks.get(name)
         async with lock:
+            task = asyncio.current_task()
+            if task is not None:
+                self._attempts.add(task)
+            try:
+                async with cli_lock if cli_lock is not None else nullcontext():
+                    yield
+            finally:
+                if task is not None:
+                    self._attempts.discard(task)
+
+    async def stoke_now(self, name: str, trigger: Trigger, *, break_plan: bool = False) -> ToolState:
+        """Reject overlapping main attempts, waiting for a serial CLI when needed."""
+        follow_up = False
+        async with self._main_attempt_lock(name):
             state = self.states[name]
             now = clock.now()
+            if name in self.cli_locks and trigger != "manual":
+                if self._expire_plan(state, now):
+                    self._persist()
+                due, planned = effective_next(state, self.settings)
+                if due is None or due > now or planned != (trigger == "planned"):
+                    return state
             if trigger == "manual" and state.plan is not None and in_quiet_zone(state.plan, now):
                 if not break_plan:
                     raise PlanConflict(state.plan.target_at)
@@ -610,9 +752,6 @@ class Scheduler:
             pending = state.pending_verify if callable(verify) else None
             state.pending_verify = pending
             attempt_at = pending.attempt_at if pending is not None else now
-            task = asyncio.current_task()
-            if task is not None:
-                self._attempts.add(task)
             started = time.perf_counter()
             original = state.five_hour
             closed_at = state.window_closed_at
@@ -632,6 +771,8 @@ class Scheduler:
                         result = await provider.stoke()
                 except StokeUnverified as error:
                     self._record_failure(state, attempt_at, trigger, str(error), started)
+                    if error.snapshot is not None:
+                        self._apply_limits_observation(state, error.snapshot, clock.now())
                     if pending is not None:
                         pending.reads += 1
                         if pending.reads >= 3:
@@ -644,6 +785,8 @@ class Scheduler:
                     self._record_failure(state, attempt_at, trigger, "limits unreadable", started)
                 except ProviderError as error:
                     state.pending_verify = None
+                    if isinstance(error, StokeNotDelivered):
+                        self._apply_limits_observation(state, error.snapshot, clock.now())
                     message = SIGNED_OUT_ERROR if isinstance(error, StokeSignedOut) else str(error)
                     self._record_failure(state, attempt_at, trigger, message, started)
                 except Exception:
@@ -654,6 +797,8 @@ class Scheduler:
                     state.pending_verify = None
                     completed_at = clock.now()
                     if result.five_hour.resets_at <= completed_at:
+                        if result.snapshot is not None:
+                            self._apply_limits_observation(state, result.snapshot, completed_at)
                         self._record_failure(
                             state, attempt_at, trigger, "reset time not in the future", started, stale=True,
                         )
@@ -672,18 +817,20 @@ class Scheduler:
                         state.weekly = result.weekly
                         if result.scoped is not None:
                             state.scoped_limits = result.scoped
-                        if result.groups is not None:
-                            state.quota_groups = result.groups
+                        observed = completed_at
+                        if result.snapshot is not None and result.snapshot.observed_at is not None:
+                            observed = min(result.snapshot.observed_at, completed_at)
+                        self._apply_group_observation(state, result.groups, observed)
                         state.limits_at = completed_at
                         state.consecutive_failures = 0
+                        if auto_stopped and state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke:
+                            self._set_auto_state(state, True, completed_at)
                         state.stale_resets = 0
-                        if auto_stopped:
-                            state.auto_stoke = True
                         if attempt_plan is not None and state.plan is attempt_plan:
                             auto_after = attempt_plan.auto_after
                             self._close_occurrence(state, "done", completed_at)
                             if auto_after is not None:
-                                state.auto_stoke = auto_after
+                                self._set_auto_state(state, auto_after, completed_at)
                                 state.stale_resets = 0
                         state.last_stoke = StokeRecord(
                             attempt_at, trigger, True, None, opened, result.duration_ms,
@@ -699,7 +846,7 @@ class Scheduler:
                         attempt_plan.retry_at = retry
                 self._startup_pending[name] = False
                 state.warning = compute_warning(state)
-                self._log_stoke(state)
+                self._log_stoke(name, state.last_stoke, state.five_hour)
             finally:
                 if completed_at is not None and state.last_stoke is not None:
                     record = state.last_stoke
@@ -714,10 +861,8 @@ class Scheduler:
                     except (OSError, ValueError) as error:
                         logger.warning("tool=%s cycle logging failed: %s", name, type(error).__name__)
                 state.running = False
-                if task is not None:
-                    self._attempts.discard(task)
                 self._persist()
-                self.events[name].set()
+                self._wake(name)
         if follow_up and self.can_refresh(name) and not state.running and not state.refreshing:
             follow_task = asyncio.create_task(self._refresh_after_weekly_reset(name), name=f"weekly-refresh:{name}")
             self._attempts.add(follow_task)
@@ -739,22 +884,166 @@ class Scheduler:
             if state.auto_stoke else None
         )
         if state.stale_resets >= STALE_RESET_LIMIT and state.auto_stoke:
-            state.auto_stoke = False
+            self._set_auto_state(state, False, clock.now())
             state.next_stoke_at = None
             logger.error("tool=%s auto-stoke stopped: repeated stale reset times", state.name)
 
-    def _log_stoke(self, state: ToolState) -> None:
-        record = state.last_stoke
+    def _log_stoke(
+        self, name: str, record: StokeRecord | None, window: Window | None, *, verify: bool = False,
+    ) -> None:
         if record is None:
             return
-        if record.ok and state.five_hour is not None:
+        if record.ok and window is not None:
             try:
-                detail = "resets_at=" + datetime.fromtimestamp(state.five_hour.resets_at, timezone.utc).isoformat()
+                detail = "resets_at=" + datetime.fromtimestamp(window.resets_at, timezone.utc).isoformat()
             except (OverflowError, OSError, ValueError):
                 detail = "resets_at=out-of-range"
         else:
             detail = "error=" + short_error(record.error or "stoke failed")
-        logger.info("tool=%s trigger=%s ok=%s duration_ms=%s %s", state.name, record.trigger, record.ok, record.duration_ms, detail)
+        logger.info(
+            "tool=%s trigger=%s ok=%s duration_ms=%s%s %s",
+            name, record.trigger, record.ok, record.duration_ms, " verify=1" if verify else "", detail,
+        )
+
+    async def _attempt_third_party(self, name: str) -> None:
+        state = self.states[name]
+        tp = state.third_party
+        assert tp is not None
+        cli_lock = self.cli_locks.get(name)
+        async with cli_lock if cli_lock is not None else nullcontext():
+            now = clock.now()
+            if (not tp.active(state.auto_stoke) or tp.running
+                    or tp.next_stoke_at is None or tp.next_stoke_at > now):
+                return
+            pending = tp.pending_verify
+            if pending is None:
+                window = self._known_third_party_window(state, tp, now)
+                if window is not None:
+                    tp.next_stoke_at = window.resets_at + self.settings.delay_for(name)
+                    self._persist()
+                    self._wake(name)
+                    return
+            tp.running = True
+            try:
+                await self._stoke_third_party(state, tp, pending, now)
+            finally:
+                tp.running = False
+                self._wake(name)
+
+    async def _stoke_third_party(
+        self, state: ToolState, tp: ThirdPartyState, pending: PendingVerify | None, now: int,
+    ) -> None:
+        name = state.name
+        provider = cast(ThirdPartyStoker, self.providers[name])
+        previous = tp.five_hour
+        started = time.perf_counter()
+        attempt_at = now if pending is None else pending.attempt_at
+        if pending is None:
+            # Persist before sending so a restart verifies before it can send again.
+            tp.pending_verify = PendingVerify(attempt_at, delivered=True)
+            self._persist()
+
+        result: GroupStokeResult | None = None
+        snapshot: LimitsSnapshot | None = None
+        reason: ThirdPartyWarningReason | None = None
+        error: str | None = None
+        reads = 0 if pending is None else pending.reads + 1
+        retry_verify = tp.pending_verify
+        if pending is not None:
+            retry_verify = replace(pending, reads=reads) if reads < 3 else None
+        try:
+            result = await (provider.stoke_third_party() if pending is None
+                            else provider.verify_third_party(pending.delivered))
+        except StokeUnverified as unverified:
+            snapshot = unverified.snapshot
+            error = "prompt sent; usage unverified"
+            tp.pending_verify = PendingVerify(attempt_at, unverified.delivered, reads) if reads < 3 else None
+            if reads >= 3:
+                group = third_party_quota(snapshot.groups) if snapshot is not None else None
+                missing = group is None or (group.five_hour is None and not group.five_hour_synthetic)
+                reason = "limits_unreadable" if missing else "did_not_open_window"
+                error = "limits unreadable" if missing else "prompt sent; window not opened"
+        except ReaderSignedOut:
+            # A signed-out read cannot resolve whether the prior prompt opened a window.
+            tp.pending_verify = retry_verify
+            error = SIGNED_OUT_ERROR
+        except ProviderError as failure:
+            tp.pending_verify = None
+            if isinstance(failure, StokeSignedOut):
+                error = SIGNED_OUT_ERROR
+            elif isinstance(failure, StokeNotDelivered):
+                snapshot = failure.snapshot
+                error = "Antigravity prompt not delivered"
+            elif isinstance(failure, LimitsUnreadable):
+                error, reason = "limits unreadable", "limits_unreadable"
+            else:
+                error = short_error(str(failure))
+        except Exception:
+            tp.pending_verify = retry_verify
+            error = "unexpected provider error"
+        else:
+            tp.pending_verify = None
+            snapshot = result.snapshot
+        completed_at = clock.now()
+        if snapshot is not None:
+            self._apply_limits_observation(state, snapshot, completed_at)
+        opened = None
+        if result is not None and result.window.resets_at <= completed_at:
+            result = None
+            error = "reset time not in the future"
+        if result is not None:
+            tp.five_hour = result.window
+            opened = opened_new_window(previous, attempt_at, result.window)
+        duration = result.duration_ms if result is not None else int((time.perf_counter() - started) * 1000)
+        tp.last_stoke = StokeRecord(attempt_at, "auto", result is not None, error, opened, duration)
+        delay = self.settings.delay_for(name)
+        if tp.active(state.auto_stoke):
+            tp.consecutive_failures = 0 if result is not None else tp.consecutive_failures + 1
+            tp.warning_reason = reason
+            tp.warning = third_party_warning(tp)
+            tp.next_stoke_at = (result.window.resets_at + delay if result is not None
+                                else next_after_failure(completed_at, tp.consecutive_failures, self.settings))
+        else:
+            self._schedule_third_party(state, completed_at)
+        cycle_tool = f"{name}-3p"
+        self._log_stoke(cycle_tool, tp.last_stoke, tp.five_hour, verify=pending is not None)
+        try:
+            self.cycles.append(CycleRecord(
+                cycle_tool, "auto", result is not None, error, attempt_at, completed_at, duration, delay,
+                previous.resets_at if previous is not None else None,
+                result.window.resets_at if result is not None else None, opened,
+            ), completed_at)
+        except (OSError, ValueError) as failure:
+            logger.warning("tool=%s cycle logging failed: %s", cycle_tool, type(failure).__name__)
+        self._persist()
+
+    async def _third_party_loop(self, name: str) -> None:
+        event = self.third_party_events[name]
+        state = self.states[name]
+        tp = state.third_party
+        assert tp is not None
+        while True:
+            event.clear()
+            try:
+                next_at = tp.next_stoke_at if tp.active(state.auto_stoke) else None
+                if next_at is None:
+                    await event.wait()
+                    continue
+                delay = next_at - clock.now()
+                if delay > 0:
+                    try:
+                        await asyncio.wait_for(event.wait(), delay)
+                    except TimeoutError:
+                        pass
+                else:
+                    await self._attempt_third_party(name)
+            except Exception as error:
+                logger.error("tool=%s-3p loop error: %s", name, type(error).__name__)
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), self.settings.retry_seconds[0])
+                except TimeoutError:
+                    pass
 
     async def _loop(self, name: str) -> None:
         event = self.events[name]
