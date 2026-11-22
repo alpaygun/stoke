@@ -276,13 +276,6 @@ def test_scoped_limits_and_plan_heading_without_product_shares() -> None:
     assert "show_scoped: tool.show_scoped ?? true" in PAGE
     assert "planName: tool.plan_name ?? null" in PAGE
     assert "if (weekly && tool.show_scoped !== false) tool.scoped.forEach(limit =>" in PAGE
-    label_track = PAGE.index("group.append(label, track);", PAGE.index("function dialUsage"))
-    scoped_loop = PAGE.index("tool.scoped.forEach", label_track)
-    scoped = PAGE.index("`Weekly · ${limit.label}`")
-    weekly_end = PAGE.index("if (weekly) group.append(text('span', 'weekly-reset'")
-    assert label_track < weekly_end < scoped_loop < scoped
-    assert "Math.abs(limit.resets_at - tool.weeklyAt) > 3600" in PAGE
-    assert "`resets ${when(limit.resets_at, now())}`" in PAGE
     history = PAGE.index("'Weekly resets'", PAGE.index("function infoContent"))
     signin = PAGE.index("'Sign-in'", history)
     assert history < signin
@@ -290,6 +283,40 @@ def test_scoped_limits_and_plan_heading_without_product_shares() -> None:
     assert "breakdown" not in PAGE
     assert "if (tool.planName) h.append(el('span', 'plan-name', `${tool.planName} plan`));" in PAGE
     assert re.search(r"\.signin-h \.plan-name\s*\{[^}]*text-transform: none", PAGE)
+
+
+def test_short_reset_uses_server_calendar_days() -> None:
+    helper = re.search(r"function shortReset\(value, current = now\(\)\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert helper
+    code = helper[1]
+    assert "const date = localDate(value), day = calendarDay(date);" in code
+    assert "(day - calendarDay(localDate(current))) / 86400000" in code
+    assert "if (days === 0) return `resets today ${clock(value)}`;" in code
+    assert "if (days > 0 && days < 7) return `resets ${DAYS[new Date(day).getUTCDay()]} ${clock(value)}`;" in code
+    assert "return `resets ${date.day} ${MONTHS[date.month - 1]}`;" in code
+
+
+def test_weekly_and_scoped_reset_times_are_in_their_label_rows() -> None:
+    usage = re.search(r"function dialUsage\(tool, weekly\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert usage
+    code = usage[1]
+    weekly, scoped = code.split("tool.scoped.forEach", 1)
+    assert "weeklyReset: weekly ? shortReset(weekly.resets_at, current) : null" in PAGE
+    assert "} else label.append(usage);" in weekly
+    assert weekly.index("el('span', 'usage-end')") < weekly.index(
+        "if (tool.weeklyReset != null) end.append(text('span', 'reset-at', tool, 'weeklyReset'));"
+    ) < weekly.index("end.append(usage);") < weekly.index("label.append(end);") < weekly.index("group.append(label, track);")
+    assert scoped.index("el('span', 'usage-end')") < scoped.index(
+        "if (limit.resets_at != null) end.append(el('span', 'reset-at', shortReset(limit.resets_at)));"
+    ) < scoped.index("end.append(el('span', 'mono',") < scoped.index(
+        "row.append(el('span', 'muted', `Weekly · ${limit.label}`), end);"
+    ) < scoped.index("group.append(row, t);")
+    assert code.count("'weekly-reset'") == 1
+    assert "row.append(text('span', 'weekly-reset', tool, 'limitsAt'));" in scoped
+    assert scoped.index("group.append(row, t);") < scoped.index("el('div', 'meta-row')")
+    assert scoped.rstrip().endswith("group.append(row);\n      }\n      return group;")
+    assert ".scoped-label { margin-top: 12px; }" in PAGE
+    assert ".track + .weekly-reset" not in PAGE
 
 
 def test_scoped_limit_settings_switch_visibility_label_and_save() -> None:
