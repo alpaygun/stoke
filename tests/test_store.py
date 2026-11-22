@@ -8,7 +8,7 @@ import pytest
 
 from conftest import FakeProvider
 from stoke.config import Settings
-from stoke.models import Plan, PlanOutcome, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, Window, serialize_tool
+from stoke.models import PendingVerify, Plan, PlanOutcome, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, ToolState, Window, serialize_tool
 from stoke.store import load, save
 
 
@@ -189,7 +189,12 @@ def test_v020_state_without_limits_at_or_stale_resets_preserves_all_values(
         assert state.limits_at is None
         assert state.stale_resets == 0
         assert not state.running
-        assert serialize_tool(state) == {**data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None, "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None, "scoped_limits": [], "show_scoped": True, "plan_name": None, "weekly_resets": [], "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct"}
+        assert serialize_tool(state) == {
+            **data[name], "limits_at": None, "stale_resets": 0, "resets": None, "plan": None, "plan_outcome": None,
+            "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None, "scoped_limits": [],
+            "show_scoped": True, "plan_name": None, "weekly_resets": [], "window_closed_at": None,
+            "reset_hold_minutes": 30, "read_mode": "direct", "quota_groups": [], "pending_verify": None,
+        }
     assert "using defaults" not in caplog.text
 
 
@@ -490,3 +495,86 @@ def test_invalid_plan_values_take_corrupt_file_path(
     loaded = load(path, settings, providers)
     assert all(not state.auto_stoke and state.plan is None and state.plan_outcome is None for state in loaded.values())
     assert "using defaults" in caplog.text
+
+
+def test_quota_groups_pending_verification_round_trip_and_legacy_file(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    state = states["claude"]
+    state.five_hour, state.auto_stoke = Window(42, 20000, 300), True
+    state.quota_groups = [QuotaGroup("third_party", Window(5, 19000, 300), None)]
+    state.pending_verify = PendingVerify(1800, True, 2)
+    save(path, states)
+    assert load(path, settings, providers) == states
+
+    data = json.loads(path.read_text())
+    del data["claude"]["quota_groups"], data["claude"]["pending_verify"]
+    path.write_text(json.dumps(data))
+    state.quota_groups, state.pending_verify = [], None
+    assert load(path, settings, providers) == states
+
+
+@pytest.mark.parametrize("value", [
+    None, 42, [], {},
+    {"attempt_at": True, "delivered": True, "reads": 0},
+    {"attempt_at": -1, "delivered": False, "reads": 0},
+    {"attempt_at": 0, "delivered": 1, "reads": 0},
+    {"attempt_at": 0, "delivered": False, "reads": True},
+    {"attempt_at": 0, "delivered": False, "reads": -1},
+    {"attempt_at": 0, "delivered": False, "reads": 4},
+    {"attempt_at": 0, "delivered": False},
+])
+def test_invalid_pending_verification_keeps_other_state(
+    value: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    states["claude"].five_hour = Window(42, 20000, 300)
+    states["claude"].quota_groups = [QuotaGroup("third_party", None, None)]
+    save(path, states)
+    data = json.loads(path.read_text())
+    data["claude"]["pending_verify"] = value
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    assert load(path, settings, providers) == states
+    assert "using defaults" not in caplog.text
+
+
+@pytest.mark.parametrize("container", [None, {}, "not a list", [
+    None, [], {"key": ["third_party"]}, {"key": "unsupported", "five_hour": None, "weekly": None},
+    {"key": "third_party", "five_hour": None},
+    {"key": "third_party", "five_hour": {}, "weekly": None},
+    {"key": "third_party", "five_hour": None, "weekly": {"used_percent": True, "resets_at": 0, "window_minutes": 1}},
+    {"key": "third_party", "five_hour": None, "weekly": {
+        "used_percent": 10 ** 1000, "resets_at": 0, "window_minutes": 1,
+    }},
+]])
+def test_malformed_quota_groups_keep_state_and_valid_entries_are_capped(
+    container: object, settings_factory: Callable[..., Settings], caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = settings_factory()
+    providers = {"claude": FakeProvider()}
+    path = settings.data_dir / "state.json"
+    states = load(path, settings, providers)
+    state = states["claude"]
+    state.five_hour = Window(42, 20000, 300)
+    state.pending_verify = PendingVerify(0, False, 3)
+    save(path, states)
+    data = json.loads(path.read_text())
+    data["claude"]["quota_groups"] = container
+    path.write_text(json.dumps(data))
+    caplog.clear()
+    assert load(path, settings, providers) == states
+    assert "using defaults" not in caplog.text
+    if isinstance(container, list):
+        state.quota_groups = [QuotaGroup("third_party", None, None)]
+        good = serialize_tool(state)["quota_groups"][0]
+        data["claude"]["quota_groups"] = [*container, good, good, good, good]
+        path.write_text(json.dumps(data))
+        restored = load(path, settings, providers)["claude"]
+        assert restored.quota_groups == state.quota_groups * 3
+        assert restored.pending_verify == state.pending_verify

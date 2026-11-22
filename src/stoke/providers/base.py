@@ -8,11 +8,13 @@ from typing import Any, Iterator, Protocol
 
 from ..models import LimitsSnapshot, StokeResult, Window
 
-_SECRET = re.compile(r"sk-ant-[A-Za-z0-9_\-]+|eyJ[A-Za-z0-9_\-]{20,}")
+_SECRET = re.compile(
+    r"sk-ant-[A-Za-z0-9_\-]+|eyJ[A-Za-z0-9_\-]{20,}|ya29\.[A-Za-z0-9_\-.]+|1//[A-Za-z0-9_\-]+"
+)
 
 
 def redact(message: str) -> str:
-    """Mask Claude tokens and JWT-like strings before truncating or logging."""
+    """Mask OAuth tokens and JWT-like strings before truncating or logging."""
     return _SECRET.sub("[REDACTED]", message)
 
 
@@ -30,6 +32,14 @@ class ProviderError(Exception):
 
 class LimitsUnreadable(ProviderError):
     """The CLI succeeded but its limit data could not be read."""
+
+
+class StokeUnverified(ProviderError):
+    """A prompt may have been sent but no read has confirmed an open window."""
+
+    def __init__(self, message: str, *, delivered: bool) -> None:
+        super().__init__(message)
+        self.delivered: bool = delivered
 
 
 class ReaderSignedOut(ProviderError):
@@ -67,7 +77,11 @@ def plan_name(value: Any, *, prefix: str = "") -> str | None:
 
 
 class Provider(Protocol):
-    """One tool's fixed stoke operation."""
+    """One tool's fixed stoke operation.
+
+    A provider may expose async verify_stoke(delivered: bool) -> StokeResult
+    for the scheduler to reconcile an unverified prompt without sending another.
+    """
 
     name: str
     label: str

@@ -9,8 +9,9 @@ from typing import Any, Callable, Mapping, Sequence
 import pytest
 
 from stoke.config import Settings
-from stoke.models import LimitsSnapshot, ResetCredit, ResetCredits, Window, sanitize_reset_title
+from stoke.models import LimitsSnapshot, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, Window, sanitize_reset_title
 from stoke.providers import create_providers
+from stoke.providers.antigravity import AntigravityProvider
 from stoke.providers.base import LimitsUnreadable, ProviderError, parse_window, redact
 from stoke.providers.claude import ClaudeProvider, parse_claude_stream
 from stoke.providers.codex import (
@@ -692,3 +693,49 @@ def test_dry_run_reader_usage_credits_and_failure(
             for offset in (2 * 86400 + 5000, 18 * 86400, 26 * 86400)
         ], 0), plan_name="Plus")
     assert delays == [1.0]
+
+
+def test_antigravity_registry_and_dry_run_details(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 1800000000
+    monkeypatch.setattr("stoke.clock.now", lambda: now)
+
+    async def no_wait(seconds: float) -> None:
+        pass
+
+    settings = settings_factory(STOKE_TOOLS="claude,codex,antigravity")
+    real = create_providers(settings_factory(STOKE_TOOLS="antigravity", STOKE_DRY_RUN="0"))["antigravity"]
+    assert isinstance(real, AntigravityProvider)
+    assert not hasattr(real, "read_login_expires_at")
+    providers = create_providers(settings)
+    assert list(providers) == ["claude", "codex", "antigravity"]
+    for name, provider in providers.items():
+        assert isinstance(provider, DryRunReader)
+        provider.sleep = no_wait
+        assert not hasattr(provider, "verify_stoke")
+        snapshot = asyncio.run(provider.read_limits())
+        result = asyncio.run(provider.stoke())
+        assert not snapshot.window_confirmed
+        if name == "antigravity":
+            assert snapshot.groups == result.groups == [QuotaGroup(
+                "third_party", Window(2, now + 4 * 3600, 300), Window(1, now + 6 * 86400, 10080),
+            )]
+            assert snapshot.scoped == result.scoped == [ScopedLimit("Argon", 9, now + 6 * 86400)]
+            assert snapshot.resets is snapshot.plan_name is None
+        else:
+            assert result.groups is result.scoped is snapshot.groups is None
+            assert snapshot.plan_name == ("Pro" if name == "claude" else "Plus")
+            assert snapshot.resets.available == (2 if name == "claude" else 3)
+
+
+def test_antigravity_dry_run_failure_applies_to_stoke_and_usage(settings_factory: Callable[..., Settings]) -> None:
+    settings = settings_factory(STOKE_TOOLS="antigravity", STOKE_DRY_RUN_FAIL="antigravity")
+
+    async def no_wait(seconds: float) -> None:
+        pass
+
+    provider = DryRunReader("antigravity", "Antigravity", settings, no_wait)
+    for operation in (provider.stoke, provider.read_limits):
+        with pytest.raises(ProviderError, match="^dry-run failure$"):
+            asyncio.run(operation())

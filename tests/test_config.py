@@ -31,6 +31,19 @@ def test_defaults_and_frozen_environment_snapshot() -> None:
         settings.port = 1  # type: ignore[misc]
 
 
+def test_optional_antigravity_home_and_delay(tmp_path: Path) -> None:
+    assert load_settings({}).antigravity_dir == Path("/home/stoke/.gemini/antigravity-cli")
+    settings = load_settings({
+        "HOME": str(tmp_path),
+        "STOKE_TOOLS": "claude,codex,antigravity",
+        "STOKE_TOOL_DELAYS": "antigravity=30",
+    })
+    assert settings.tools == ("claude", "codex", "antigravity")
+    assert settings.antigravity_dir == tmp_path / ".gemini" / "antigravity-cli"
+    assert settings.delay_for("antigravity") == 30
+    assert settings.delay_for("claude") == settings.delay_seconds
+
+
 @pytest.mark.parametrize("value,expected", [
     ("0", False), ("false", False), ("no", False), ("1", True),
     ("False", True), (" 0", True), ("garbage", True), ("", True),

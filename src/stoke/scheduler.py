@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 from . import clock, store
 from .config import Settings
 from .cycles import CycleLog, CycleRecord
-from .models import AutoRefresh, READ_MODES, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
-from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, short_error
+from .models import AutoRefresh, PendingVerify, READ_MODES, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
+from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, StokeUnverified, short_error
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup", "planned", "reset"]
@@ -118,7 +118,9 @@ def next_after_failure(now: int, consecutive_failures: int, settings: Settings) 
 
 
 def startup_decision(state: ToolState, now: int, settings: Settings) -> Literal["stoke_now"] | int:
-    """Reuse a future window; otherwise stoke immediately."""
+    """Resume verification first, otherwise reuse a future window if known."""
+    if state.pending_verify is not None:
+        return "stoke_now"
     if state.five_hour is not None and state.five_hour.resets_at > now:
         if state.window_closed_at is not None:
             next_at = reset_next(state, now, settings)
@@ -389,7 +391,7 @@ class Scheduler:
             if state.limits_at is None or observed >= state.limits_at:
                 window_reset = detect_window_reset(state.five_hour, snapshot.five_hour.used_percent, observed)
                 weekly_reset = False
-                if snapshot.weekly is not None:
+                if snapshot.weekly is not None and not snapshot.weekly_synthetic:
                     weekly_reset = self._record_weekly_reset(state, snapshot.weekly, observed, snapshot.resets)
                     state.weekly = snapshot.weekly
                 if ((weekly_reset or window_reset) and state.window_closed_at is None
@@ -403,13 +405,29 @@ class Scheduler:
                             self.events[name].set()
                     else:
                         kept_window = True
-                if state.five_hour is not None:
+                if (snapshot.window_confirmed and not state.running and snapshot.five_hour.resets_at > observed
+                        and (state.five_hour is None or state.five_hour.resets_at <= observed)):
+                    state.five_hour = snapshot.five_hour
+                    state.window_closed_at = None
+                    pending_cleared = " pending cleared" if state.pending_verify is not None else ""
+                    state.pending_verify = None
+                    if state.auto_stoke:
+                        state.next_stoke_at = snapshot.five_hour.resets_at + self.settings.delay_for(name)
+                        self.events[name].set()
+                    try:
+                        resets_at = datetime.fromtimestamp(snapshot.five_hour.resets_at, timezone.utc).isoformat()
+                    except (OverflowError, OSError, ValueError):
+                        resets_at = "out-of-range"
+                    logger.info("tool=%s read confirmed an open window resets_at=%s%s", name, resets_at, pending_cleared)
+                elif state.five_hour is not None:
                     state.five_hour = Window(
                         snapshot.five_hour.used_percent, state.five_hour.resets_at, state.five_hour.window_minutes,
                     )
                 state.limits_at = observed
                 if snapshot.scoped is not None:
                     state.scoped_limits = snapshot.scoped
+                if snapshot.groups is not None:
+                    state.quota_groups = snapshot.groups
                 if snapshot.plan_name is not None:
                     state.plan_name = snapshot.plan_name
                 if snapshot.resets is not None:
@@ -576,12 +594,17 @@ class Scheduler:
         follow_up = False
         async with lock:
             state = self.states[name]
-            attempt_at = clock.now()
-            if trigger == "manual" and state.plan is not None and in_quiet_zone(state.plan, attempt_at):
+            now = clock.now()
+            if trigger == "manual" and state.plan is not None and in_quiet_zone(state.plan, now):
                 if not break_plan:
                     raise PlanConflict(state.plan.target_at)
-                self._close_occurrence(state, "broken", attempt_at)
-            attempt_plan = state.plan if state.plan is not None and attempt_at >= state.plan.target_at else None
+                self._close_occurrence(state, "broken", now)
+            attempt_plan = state.plan if state.plan is not None and now >= state.plan.target_at else None
+            provider = self.providers[name]
+            verify = getattr(provider, "verify_stoke", None)
+            pending = state.pending_verify if callable(verify) else None
+            state.pending_verify = pending
+            attempt_at = pending.attempt_at if pending is not None else now
             task = asyncio.current_task()
             if task is not None:
                 self._attempts.add(task)
@@ -598,15 +621,31 @@ class Scheduler:
             try:
                 self._persist()
                 try:
-                    result = await self.providers[name].stoke()
+                    if pending is not None and callable(verify):
+                        result = await verify(pending.delivered)
+                    else:
+                        result = await provider.stoke()
+                except StokeUnverified as error:
+                    self._record_failure(state, attempt_at, trigger, str(error), started)
+                    if pending is not None:
+                        pending.reads += 1
+                        if pending.reads >= 3:
+                            state.pending_verify = None
+                            logger.info("tool=%s stoke verification gave up; next attempt sends a new prompt", name)
+                    elif closed_at is not None or original is None or original.resets_at <= attempt_at:
+                        state.pending_verify = PendingVerify(attempt_at, error.delivered)
                 except LimitsUnreadable:
+                    state.pending_verify = None
                     self._record_failure(state, attempt_at, trigger, "limits unreadable", started)
                 except ProviderError as error:
+                    state.pending_verify = None
                     self._record_failure(state, attempt_at, trigger, str(error), started)
                 except Exception:
                     # Unexpected provider exceptions must not expose their potentially secret text.
+                    state.pending_verify = None
                     self._record_failure(state, attempt_at, trigger, "unexpected provider error", started)
                 else:
+                    state.pending_verify = None
                     completed_at = clock.now()
                     if result.five_hour.resets_at <= completed_at:
                         self._record_failure(
@@ -625,6 +664,10 @@ class Scheduler:
                         state.five_hour = result.five_hour
                         state.window_closed_at = None
                         state.weekly = result.weekly
+                        if result.scoped is not None:
+                            state.scoped_limits = result.scoped
+                        if result.groups is not None:
+                            state.quota_groups = result.groups
                         state.limits_at = completed_at
                         state.consecutive_failures = 0
                         state.stale_resets = 0

@@ -596,6 +596,7 @@ def test_state_shape_manual_result_health_and_page(
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None,
             "scoped_limits": [], "show_scoped": True, "plan_name": None, "weekly_resets": [],
+            "quota_groups": [], "pending_verify": None,
             "auth": {"stoke": {"label": "1-year token", "expires_at": None}, "read": {"label": "Account login", "expires_at": None}},
         }
         result = client.post("/api/tools/claude/stoke", headers=HEADERS).json()

@@ -6,8 +6,15 @@ from typing import Awaitable, Callable
 
 from .. import clock
 from ..config import Settings
-from ..models import LimitsSnapshot, ResetCredit, ResetCredits, ScopedLimit, StokeResult, Window
+from ..models import LimitsSnapshot, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, StokeResult, Window
 from .base import ProviderError
+
+
+def _antigravity_details(now: int) -> tuple[list[ScopedLimit], list[QuotaGroup]]:
+    weekly_end = now + 6 * 86400
+    return [ScopedLimit("Argon", 9.0, weekly_end)], [
+        QuotaGroup("third_party", Window(2.0, now + 4 * 3600, 300), Window(1.0, weekly_end, 10080)),
+    ]
 
 
 class DryRunProvider:
@@ -35,10 +42,12 @@ class DryRunProvider:
         if self.name in self.settings.dry_run_fail:
             raise ProviderError("dry-run failure")
         now = clock.now()
+        scoped, groups = _antigravity_details(now) if self.name == "antigravity" else (None, None)
         return StokeResult(
             Window(1.0, now + self.settings.dry_run_window_seconds, 300),
             Window(25.0, now + 7 * 24 * 3600, 10080),
             int((time.perf_counter() - started) * 1000),
+            scoped=scoped, groups=groups,
         )
 
 
@@ -55,6 +64,11 @@ class DryRunReader(DryRunProvider):
         if self.name in self.settings.dry_run_fail:
             raise ProviderError("dry-run failure")
         now = clock.now()
+        five_hour = Window(3.0, now + self.settings.dry_run_window_seconds, 300)
+        weekly = Window(27.0, now + 7 * 24 * 3600, 10080)
+        if self.name == "antigravity":
+            scoped, groups = _antigravity_details(now)
+            return LimitsSnapshot(five_hour, weekly, None, scoped=scoped, groups=groups)
         credits = [
             ResetCredit("Full reset (Weekly + 5 hr)", now + offset - 30 * 86400, now + offset)
             for offset in (2 * 86400 + 5000, 18 * 86400, 26 * 86400)
@@ -66,8 +80,7 @@ class DryRunReader(DryRunProvider):
                 ResetCredit("Full reset", None, now + 27 * 86400, True),
             ], 0)
         return LimitsSnapshot(
-            Window(3.0, now + self.settings.dry_run_window_seconds, 300),
-            Window(27.0, now + 7 * 24 * 3600, 10080), resets,
+            five_hour, weekly, resets,
             scoped=[ScopedLimit("Fable", 23.0, now + 7 * 86400)] if mode == "direct" and self.name == "claude" else None,
             plan_name=("Pro" if self.name == "claude" else "Plus") if mode == "direct" else None,
         )

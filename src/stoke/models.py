@@ -89,6 +89,24 @@ class ScopedLimit:
 
 
 @dataclass
+class QuotaGroup:
+    """Extra vendor quota with optional real window deadlines."""
+
+    key: str
+    five_hour: Window | None
+    weekly: Window | None
+
+
+@dataclass
+class PendingVerify:
+    """Original prompt attempt awaiting a confirming usage read."""
+
+    attempt_at: int
+    delivered: bool
+    reads: int = 0
+
+
+@dataclass
 class LimitsSnapshot:
     """Limits from a read that sends no model message."""
 
@@ -100,6 +118,9 @@ class LimitsSnapshot:
     plan_name: str | None = None
     # Set when a direct read fell back to the CLI only to refresh the login token.
     direct_retry: bool = False
+    groups: list[QuotaGroup] | None = None
+    window_confirmed: bool = False
+    weekly_synthetic: bool = False
 
 
 @dataclass
@@ -109,6 +130,8 @@ class StokeResult:
     five_hour: Window
     weekly: Window | None
     duration_ms: int
+    scoped: list[ScopedLimit] | None = None
+    groups: list[QuotaGroup] | None = None
 
 
 @dataclass
@@ -194,6 +217,8 @@ class ToolState:
     scoped_limits: list[ScopedLimit] = field(default_factory=list)
     show_scoped: bool = True
     plan_name: str | None = None
+    quota_groups: list[QuotaGroup] = field(default_factory=list)
+    pending_verify: PendingVerify | None = None
 
 
 def serialize_tool(
