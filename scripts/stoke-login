@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sign the no-message Claude usage reader in with a browser login, kept apart from the stoke token.
+# Sign in to a CLI with a browser login.
 set -eu
 case "${1:-}" in
   claude)
@@ -7,5 +7,9 @@ case "${1:-}" in
     mkdir -p -m 700 "$dir"
     exec env -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$dir" claude auth login
     ;;
-  *) echo "usage: stoke-login claude" >&2; exit 2 ;;
+  antigravity)
+    echo "Open the URL, sign in, then paste the code here within 60 seconds (run again if it times out)." >&2
+    exec env -u CLAUDE_CODE_OAUTH_TOKEN AGY_CLI_DISABLE_AUTO_UPDATE=true agy -p /usage
+    ;;
+  *) echo "usage: stoke-login claude|antigravity" >&2; exit 2 ;;
 esac

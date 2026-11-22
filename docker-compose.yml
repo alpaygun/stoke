@@ -9,6 +9,7 @@ services:
     volumes:
       - ./data:/data
       - codex-home:/home/stoke/.codex
+      - antigravity-home:/home/stoke/.gemini
     mem_limit: 1g
     cpus: "2"
     pids_limit: 256
@@ -21,3 +22,4 @@ services:
 
 volumes:
   codex-home:
+  antigravity-home:
