@@ -130,6 +130,8 @@ class CodexProvider:
     name = "codex"
     label = "Codex"
     reset_closes_window = True
+    reset_credits: bool = True
+    read_modes: bool = True
     auth_labels = {"shared": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command, rpc: RpcRunner = run_jsonrpc, http: HttpGet = http_get) -> None:

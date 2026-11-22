@@ -252,7 +252,6 @@ def test_reset_rows_separate_expiry_and_remaining_time() -> None:
 
 def test_vendor_reset_tile_status_cooldown_and_footer() -> None:
     assert not re.search(r"manual_resets|manualResets|resets\.manual|resets/(update|remove)|openReset|reset-dialog|reset-blocked|reset-actions|reset-tools|reset-note|if \(false\)", PAGE)
-    assert "if (tool.refreshable) stats.append(resetTile(tool));" in PAGE
     assert "resets: tool.resets" in PAGE
     assert "if (credit.usable === false)" in PAGE
     assert "item.classList.add('blocked');" in PAGE
@@ -334,15 +333,26 @@ def test_login_expiry_chips_and_warning() -> None:
     assert "left <= 0 ? 'Usage login expired' : 'Usage login expires soon'" in PAGE
     assert "The account login that reads ${tool.label} usage" in PAGE
     assert "has expired; usage and reset credits are no longer read." in PAGE
-    assert "['read_signed_out', 'read_login_expiring'].includes(tool.warningKey)" in PAGE
     assert "caution: ['token_expiring', 'read_login_expiring'].includes(tool.warning)" in PAGE
 
 
+def test_signed_out_warning_uses_the_tools_login() -> None:
+    assert "['signed_out', ['Signed out'," in PAGE
+    assert "['signed_out', 'read_signed_out', 'read_login_expiring'].includes(tool.warningKey)" in PAGE
+    assert "`docker compose exec stoke stoke-login ${tool.name}`" in PAGE
+    assert "stoke-login " + "claude" not in PAGE
+    assert "const signedOut = ['signed_out', 'read_signed_out'].includes(tool.warning);" in PAGE
+    assert "if (signedOut && tool.auth?.shared)" in PAGE
+    assert "The ${tool.label} account login has expired; stoking and usage reading have stopped." in PAGE
+    assert "warningDetail: tool.warning ? (signedOut ||" in PAGE
+
+
 def test_read_method_settings_and_refresh_interval_bounds() -> None:
-    assert "rmBox.hidden = !tool.refreshable;" in PAGE
+    assert "const rmBox = document.querySelector('#rm-box')" in PAGE
+    assert "rmBox.hidden = !tool.refreshable || tool.capabilities?.read_modes === false;" in PAGE
     assert "r.value === (tool.read_mode ?? 'direct')" in PAGE
     assert "r.disabled = settingsSaving || rmBox.hidden" in PAGE
-    assert "const rmChanged = tool.refreshable && mode !== tool.read_mode;" in PAGE
+    assert "const rmChanged = !rmBox.hidden && tool.capabilities?.read_modes !== false && mode !== tool.read_mode;" in PAGE
     assert "!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged" in PAGE
     for hint in ("Asks the usage endpoint directly; falls back to the CLI if needed",
                  "Asks the official CLI only. Reset credits are not available", "Asks the official CLI only"):
@@ -353,6 +363,25 @@ def test_read_method_settings_and_refresh_interval_bounds() -> None:
     assert "Math.max(10, (direction > 0 ? Math.floor(minutes / 5) + 1 : Math.ceil(minutes / 5) - 1) * 5)" in PAGE
     assert "Enter 10 to 60 minutes." in PAGE
     assert "Anthropic limits how often usage can be read: Claude usage is read at most once every 10 minutes." in PAGE
+
+
+def test_three_card_layout_and_reset_credit_capability() -> None:
+    wide = re.search(r"@media \(min-width: 1100px\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert wide and ".cards.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }" in wide[1]
+    render = re.search(r"function renderDial\(currentState, vm\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert render and "const three = vm.length >= 3;" in render[1]
+    assert "if (three) wrap.classList.add('wide');" in render[1]
+    assert "el('main', three ? 'cards three' : 'cards')" in render[1]
+    assert "resetCredits: tool.capabilities?.reset_credits ?? true" in PAGE
+    assert "if (tool.refreshable && tool.resetCredits) stats.append(resetTile(tool));" in render[1]
+
+
+def test_gap_and_plan_copy_support_a_third_tool() -> None:
+    gap = re.search(r"function offsetGap\(currentState\) \{(.*?)\n    \}", PAGE, re.DOTALL)
+    assert gap and "if (!tools?.claude || !tools.codex) return null;" in gap[1]
+    assert "Object.keys(tools)" not in gap[1]
+    assert "tools.length === 2 ? 'Plan one or both' : 'Plan one or more'" in PAGE
+    assert PAGE.count("joinLabels(okLabels)") == 2
 
 
 def test_plan_and_read_settings_cards_and_segmented_choices() -> None:

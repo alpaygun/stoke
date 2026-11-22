@@ -10,6 +10,7 @@
     :root {
       --page-padding: 32px 16px 48px;
       --page-width: 1120px;
+      --page-width-wide: 1240px;
       --page-gap: 24px;
       --font: 'Plus Jakarta Sans', system-ui, sans-serif;
       --mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -100,6 +101,7 @@
     [hidden] { display: none !important; }
     .page { min-height: 100vh; padding: var(--page-padding); }
     .wrap { max-width: var(--page-width); margin: 0 auto; display: flex; flex-direction: column; gap: var(--page-gap); }
+    .wrap.wide { max-width: var(--page-width-wide); }
     .header, .header-tools, .brand, .card-heading, .tool-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
     .header, .card-heading { justify-content: space-between; }
     .card-heading { flex-wrap: nowrap; }
@@ -373,6 +375,15 @@
     .status-line { align-items: baseline; }
     .status-line .ic { align-self: flex-start; }
 
+    @media (min-width: 1100px) {
+      .cards.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .cards.three .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+      .cards.three .stats > :nth-child(3) { grid-column: 1 / -1; }
+      .cards.three .resets-head { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
+      .cards.three .resets-head .stat-head { flex: 1 0 auto; }
+      .cards.three .dial-body { justify-content: center; align-content: flex-start; }
+      .cards.three .refresh { gap: 6px; font-size: 13px; }
+    }
     @media (max-width: 931px) {
       .cards { grid-template-columns: minmax(0, 1fr); }
       .card { grid-row: auto; grid-template-rows: repeat(4, auto); }
@@ -433,7 +444,7 @@
         <section class="settings-box">
           <div class="settings-row">
             <span class="settings-tile" data-settings-icon="check"></span>
-            <div class="settings-copy"><strong>Tools</strong><span>Plan one or both</span></div>
+            <div class="settings-copy"><strong>Tools</strong><span id="plan-tools-subtitle">Plan one or both</span></div>
           </div>
           <div id="plan-tools"></div>
         </section>
@@ -611,6 +622,7 @@
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const WARN = new Map([
       ['auto_stopped', ['Auto-stoke stopped', 'The CLI kept reporting a reset time in the past, so auto-stoke was switched off to avoid repeated messages. Turn auto-stoke on in Settings or press Stoke now to resume.']],
+      ['signed_out', ['Signed out', 'Sign in again from the stoke folder on the server:']],
       ['did_not_open_window', ['No new window opened', 'The stoke succeeded but the window did not restart.']],
       ['limits_unreadable', ['Limits unreadable', 'The CLI answered but its limits could not be read.']],
       ['stoke_failing', ['Stoke keeps failing', 'Several attempts in a row failed; retrying with backoff.']],
@@ -618,7 +630,6 @@
       ['token_expiring', ['Stoke token expires soon', '']],
       ['read_login_expiring', ['Usage login expires soon', '']]
     ]);
-    const LOGIN_COMMAND = 'docker compose exec stoke stoke-login claude';
     const dialogOpen = () => !!document.querySelector('dialog[open]');
     let state = null;
     let clockOffset = 0;
@@ -702,6 +713,10 @@
         else lastResult = 'Succeeded';
       }
       let warning = tool.warning ? WARN.get(tool.warning) : null;
+      const signedOut = ['signed_out', 'read_signed_out'].includes(tool.warning);
+      if (signedOut && tool.auth?.shared) {
+        warning = [warning[0], `The ${tool.label} account login has expired; stoking and usage reading have stopped. Sign in again from the stoke folder on the server:`];
+      }
       if (tool.warning === 'token_expiring') {
         const left = tool.auth.stoke.expires_at - current;
         warning = [left <= 0 ? 'Stoke token expired' : 'Stoke token expires soon',
@@ -723,6 +738,7 @@
       return {
         name: tool.name, label: tool.label, auto: !!tool.auto_stoke, running: !!tool.running,
         refreshable: !!tool.refreshable, refreshing: !!tool.refreshing,
+        resetCredits: tool.capabilities?.reset_credits ?? true,
         resets: tool.resets, scoped: tool.scoped_limits ?? [], show_scoped: tool.show_scoped ?? true, weeklyAt: weekly?.resets_at ?? null,
         planName: tool.plan_name ?? null,
         auth: tool.auth, last_read: tool.last_read, warningKey: tool.warning, caution: ['token_expiring', 'read_login_expiring'].includes(tool.warning),
@@ -744,7 +760,7 @@
         dialLabel: open && five ? `Window ${Math.round(elapsed * 100)}% elapsed, ${remaining} left` : 'Window closed',
         dialCaption: open && five ? `left · ends ${clock(end)}` : 'window closed',
         hasWarning: !!tool.warning, warning: warning ? warning[0] : tool.warning,
-        warningDetail: tool.warning ? (['read_signed_out', 'token_expiring', 'read_login_expiring'].includes(tool.warning) ? warning[1] : `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.`) : ''
+        warningDetail: tool.warning ? (signedOut || ['token_expiring', 'read_login_expiring'].includes(tool.warning) ? warning[1] : `${warning ? warning[1] + ' ' : ''}Failures: ${tool.consecutive_failures ?? 0}.`) : ''
       };
     }
     function interval(seconds) {
@@ -912,7 +928,9 @@
       const box = el('div', `warning${tool.caution ? ' caution' : ''}`), copy = el('div');
       box.append(icon('warning'));
       copy.append(el('strong', '', tool.warning), el('br'), el('span', '', tool.warningDetail));
-      if (['read_signed_out', 'read_login_expiring'].includes(tool.warningKey)) copy.append(el('code', 'command', LOGIN_COMMAND));
+      if (['signed_out', 'read_signed_out', 'read_login_expiring'].includes(tool.warningKey)) {
+        copy.append(el('code', 'command', `docker compose exec stoke stoke-login ${tool.name}`));
+      }
       box.append(copy);
       return box;
     }
@@ -1014,7 +1032,7 @@
     }
     function offsetGap(currentState) {
       const tools = currentState?.tools;
-      if (!tools || Object.keys(tools).length !== 2 || !tools.claude || !tools.codex) return null;
+      if (!tools?.claude || !tools.codex) return null;
       const a = tools.claude.five_hour?.resets_at, b = tools.codex.five_hour?.resets_at;
       if (a == null || b == null) return null;
       const period = WINDOW + toolDelay(a <= b ? tools.claude : tools.codex, currentState);
@@ -1213,8 +1231,10 @@
       planForm.querySelectorAll('[name="repeat"]').forEach(input => { input.checked = input.value === (plan?.repeat ?? 'once'); });
       const after = plan?.auto_after == null ? 'keep' : plan.auto_after ? 'on' : 'off';
       planForm.querySelectorAll('[name="auto_after"]').forEach(input => { input.checked = input.value === after; });
+      const tools = Object.values(state.tools);
+      document.querySelector('#plan-tools-subtitle').textContent = tools.length === 2 ? 'Plan one or both' : 'Plan one or more';
       planTools.replaceChildren();
-      Object.values(state.tools).forEach(tool => {
+      tools.forEach(tool => {
         const label = el('label', 'settings-row settings-sub plan-tool'), copy = el('div', 'settings-copy'), input = el('input', 'switch');
         input.setAttribute('type', 'checkbox');
         input.setAttribute('value', tool.name);
@@ -1250,6 +1270,9 @@
         if (planDialog.open) (planRemove.hidden ? document.querySelector('#plan-close') : planRemove).focus();
       }
     });
+    function joinLabels(labels) {
+      return labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+    }
     planForm.addEventListener('submit', async event => {
       event.preventDefault();
       if (planSaving || planSave.disabled) return;
@@ -1270,11 +1293,11 @@
       setPlanSaving(false);
       planSave.textContent = 'Save';
       if (failures.length) {
-        toast('fail', `Couldn't set the plan:\n${failures.join('\n')}${okLabels.length ? `\nSaved for ${okLabels.join(' and ')}.` : ''}`);
+        toast('fail', `Couldn't set the plan:\n${failures.join('\n')}${okLabels.length ? `\nSaved for ${joinLabels(okLabels)}.` : ''}`);
         planSave.focus();
       } else {
         planDialog.close();
-        toast('ok', `Plan set · ${okLabels.join(' and ')} at ${time}`);
+        toast('ok', `Plan set · ${joinLabels(okLabels)} at ${time}`);
       }
     });
     function readStatus(record, current) {
@@ -1518,7 +1541,7 @@
       arEnabled.checked = ar.enabled;
       arValue.value = Math.min(60, Math.max(10, Math.round(ar.seconds / 60)));
       document.querySelector('#settings-caution').hidden = name !== 'claude';
-      rmBox.hidden = !tool.refreshable;
+      rmBox.hidden = !tool.refreshable || tool.capabilities?.read_modes === false;
       readModes.forEach(r => { r.checked = r.value === (tool.read_mode ?? 'direct'); });
       syncReadHint();
       syncSettings();
@@ -1560,7 +1583,7 @@
       const arChanged = tool.refreshable && (body.enabled !== tool.auto_refresh.enabled || body.seconds !== tool.auto_refresh.seconds);
       const ssChanged = !ssBox.hidden && ssEnabled.checked !== (tool.show_scoped ?? true);
       const mode = document.querySelector('input[name="read_mode"]:checked').value;
-      const rmChanged = tool.refreshable && mode !== tool.read_mode;
+      const rmChanged = !rmBox.hidden && tool.capabilities?.read_modes !== false && mode !== tool.read_mode;
       const minutes = Math.min(300, Math.max(0, Number(rhValue.value)));
       const rhChanged = tool.refreshable && tool.reset_closes_window && minutes !== tool.reset_hold_minutes;
       if (!autoChanged && !arChanged && !ssChanged && !rmChanged && !rhChanged) { settingsDialog.close(); return; }
@@ -1784,6 +1807,8 @@
     // Dial
     function renderDial(currentState, vm) {
       const { outer, wrap } = page(standardHeader(currentState));
+      const three = vm.length >= 3;
+      if (three) wrap.classList.add('wide');
       const alerts = el('div', 'alerts');
       vm.filter(tool => tool.hasWarning).sort((a, b) => Number(a.caution) - Number(b.caution))
         .forEach(tool => alerts.append(warnLine(tool)));
@@ -1792,7 +1817,7 @@
         .sort((a, b) => b.entry.to_at - a.entry.to_at)
         .forEach(({ tool, entry }) => alerts.append(weeklyNote(tool, entry)));
       if (alerts.childElementCount) wrap.append(alerts);
-      const main = el('main', 'cards');
+      const main = el('main', three ? 'cards three' : 'cards');
       vm.forEach(tool => {
         const card = el('section', 'card');
         const heading = el('div', 'card-heading');
@@ -1818,7 +1843,7 @@
           line.append(icon('clock'), el('span', '', `Plan ${tool.plan.time}`));
           next.append(line);
         }
-        if (tool.refreshable) stats.append(resetTile(tool));
+        if (tool.refreshable && tool.resetCredits) stats.append(resetTile(tool));
         card.append(heading, body, stats);
         const actions = el('div', 'actions');
         actions.append(stokeControl(tool), refreshControl(tool), planButton(tool));

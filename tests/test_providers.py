@@ -10,7 +10,7 @@ import pytest
 
 from stoke.config import Settings
 from stoke.models import LimitsSnapshot, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, Window, sanitize_reset_title
-from stoke.providers import create_providers
+from stoke.providers import FACTORIES, create_providers
 from stoke.providers.antigravity import AntigravityProvider
 from stoke.providers.base import LimitsUnreadable, ProviderError, parse_window, redact
 from stoke.providers.claude import ClaudeProvider, parse_claude_stream
@@ -506,8 +506,10 @@ def test_reset_provider_capability_dry_run_default_and_keyword(
     factory: type[DryRunProvider], settings_factory: Callable[..., Settings],
 ) -> None:
     settings = settings_factory()
-    assert factory("claude", "Claude", settings).reset_closes_window is True
-    assert factory("claude", "Claude", settings, reset_closes_window=False).reset_closes_window is False
+    default = factory("claude", "Claude", settings)
+    assert default.reset_closes_window is default.reset_credits is default.read_modes is True
+    disabled = factory("claude", "Claude", settings, reset_closes_window=False, reset_credits=False, read_modes=False)
+    assert disabled.reset_closes_window is disabled.reset_credits is disabled.read_modes is False
 
 
 def test_reset_provider_capability_dry_run_uses_registry_flag(
@@ -670,6 +672,17 @@ def test_registry_dry_run_preserves_real_reader_capabilities(settings_factory: C
     assert isinstance(dry["claude"], DryRunReader)
     assert callable(getattr(real["codex"], "read_limits"))
     assert callable(getattr(real["claude"], "read_limits"))
+
+
+@pytest.mark.parametrize("name,supported", [("claude", True), ("codex", True), ("antigravity", False)])
+def test_registry_preserves_reset_credits_and_read_modes(
+    name: str, supported: bool, settings_factory: Callable[..., Settings],
+) -> None:
+    _, factory = FACTORIES[name]
+    provider = create_providers(settings_factory(STOKE_DRY_RUN="1", STOKE_TOOLS=name))[name]
+    assert isinstance(provider, DryRunReader)
+    assert provider.reset_credits is factory.reset_credits is supported
+    assert provider.read_modes is factory.read_modes is supported
 
 
 @pytest.mark.parametrize("fail", [False, True])

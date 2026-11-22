@@ -42,6 +42,10 @@ class StokeUnverified(ProviderError):
         self.delivered: bool = delivered
 
 
+class StokeSignedOut(ProviderError):
+    """The tool's own login is missing or expired, so a stoke cannot be sent."""
+
+
 class ReaderSignedOut(ProviderError):
     """The separate browser login used for usage reads is no longer valid."""
 

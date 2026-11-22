@@ -1,6 +1,7 @@
 """API contract, POST protection, persistence, and manual request concurrency."""
 
 import asyncio
+import json
 from copy import deepcopy
 from typing import Callable
 
@@ -13,6 +14,7 @@ from stoke.api import create_app
 from stoke.config import Settings
 from stoke.cycles import CYCLE_RETENTION_SECONDS, CycleRecord
 from stoke.models import ResetCredit, ResetCredits, ScopedLimit, Window, serialize_tool
+from stoke.providers import create_providers
 from stoke.providers.base import LimitsUnreadable, ProviderError
 from stoke.scheduler import Scheduler
 from stoke.store import load, save
@@ -592,6 +594,7 @@ def test_state_shape_manual_result_health_and_page(
             "window_closed_at": None, "reset_hold_minutes": 30, "read_mode": "direct",
             "refreshable": False, "refreshing": False, "resets": None,
             "reset_closes_window": False, "delay_seconds": 90,
+            "capabilities": {"reset_credits": True, "read_modes": True},
             "plan": None, "plan_outcome": None, "upcoming_at": None,
             "upcoming_planned": False, "quiet_from": None,
             "auto_refresh": {"enabled": False, "seconds": 600}, "last_read": None,
@@ -613,6 +616,35 @@ def test_state_shape_manual_result_health_and_page(
         assert page.status_code == 200 and "text/html" in page.headers["content-type"]
         assert "DRY RUN" in page.text and "setInterval(refresh, 5000)" in page.text
     assert not scheduler.tasks
+
+
+def test_dry_run_tool_capabilities_are_live_and_gate_read_mode(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory(STOKE_DRY_RUN="1", STOKE_TOOLS="claude,codex,antigravity")
+    providers = create_providers(settings)
+    path = settings.data_dir / "state.json"
+    scheduler = Scheduler(providers, load(path, settings, providers), settings)
+
+    with TestClient(create_app(scheduler, settings)) as client:
+        response = client.get("/api/state")
+        assert response.status_code == 200
+        tools = response.json()["tools"]
+        for name, supported in [("claude", True), ("codex", True), ("antigravity", False)]:
+            assert tools[name]["refreshable"] is True
+            assert tools[name]["capabilities"] == {"reset_credits": supported, "read_modes": supported}
+            result = client.post(f"/api/tools/{name}/read-mode", headers=HEADERS, json={"mode": "cli"})
+            if supported:
+                assert result.status_code == 200 and result.json()["read_mode"] == "cli"
+            else:
+                assert result.status_code == 404 and result.json() == {"detail": "refresh not supported"}
+
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert set(persisted) == set(tools)
+    assert all("capabilities" not in tool for tool in persisted.values())
+    assert {name: tool["read_mode"] for name, tool in persisted.items()} == {
+        "claude": "cli", "codex": "cli", "antigravity": "direct",
+    }
 
 
 def test_state_exposes_configured_delay_seconds(settings_factory: Callable[..., Settings]) -> None:

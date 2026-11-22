@@ -13,7 +13,7 @@ import pytest
 from conftest import FakeProvider, FakeReader
 from stoke.config import Settings
 from stoke.models import ReadRecord, LimitsSnapshot, PendingVerify, Plan, PlanOutcome, QuotaGroup, ResetCredit, ResetCredits, ScopedLimit, StokeRecord, StokeResult, ToolState, Window
-from stoke.providers.base import LimitsUnreadable, ProviderError, StokeUnverified
+from stoke.providers.base import LimitsUnreadable, ProviderError, StokeSignedOut, StokeUnverified
 from stoke.scheduler import REFRESH_BUSY_RETRY_SECONDS, STALE_RESET_LIMIT, AlreadyRunning, RefreshUnsupported, Scheduler, compute_warning, next_after_failure, next_after_success, opened_new_window, startup_decision
 from stoke.store import load, save
 from stoke.scheduler import PLAN_GRACE_SECONDS, PLAN_QUIET_SECONDS, PlanConflict, PlanUnreachable, effective_next, first_target, following_target, in_quiet_zone, plan_deadline, plan_due
@@ -317,6 +317,7 @@ def test_all_rule_seven_cases(
     (None, "limits unreadable", 3, "limits_unreadable"),
     (False, None, 0, "did_not_open_window"),
     (False, "limits unreadable", 3, "did_not_open_window"),
+    (False, "signed out", 3, "signed_out"),
 ])
 def test_warning_priority(opened: bool | None, error: str | None, failures: int, expected: str | None) -> None:
     state = ToolState("claude", "Claude", True, False, None, None,
@@ -335,6 +336,36 @@ def test_auto_stopped_warning_has_highest_priority(auto: bool, stale: int, expec
                       StokeRecord(1000, "auto", False, "limits unreadable", False, 2),
                       None, 4, None, stale_resets=stale)
     assert compute_warning(state) == expected
+
+
+def test_stoke_signed_out_warns_immediately_and_persists_until_success(
+    settings_factory: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000]
+    monkeypatch.setattr("stoke.clock.now", lambda: now[0])
+    settings = settings_factory(STOKE_AUTO_DEFAULT="1")
+    provider = FakeProvider(result=StokeSignedOut("Tool login expired"))
+    scheduler = make_scheduler(settings, provider)
+    state = asyncio.run(scheduler.stoke_now("claude", "auto"))
+
+    record = state.last_stoke
+    assert record is not None and not record.ok and record.error == "signed out"
+    assert state.consecutive_failures == 1 and state.warning == "signed_out"
+    assert state.next_stoke_at == 1060
+    cycle, = scheduler.cycles.read(now[0])
+    assert not cycle["ok"] and cycle["error"] == "signed out"
+
+    restarted = make_scheduler(settings, provider)
+    loaded = restarted.states["claude"]
+    assert loaded.last_stoke == record and loaded.warning == compute_warning(loaded) == "signed_out"
+    assert compute_warning(replace(loaded, auto_stoke=False, stale_resets=STALE_RESET_LIMIT)) == "auto_stopped"
+    assert compute_warning(replace(loaded, last_stoke=replace(record, ok=True))) is None
+
+    now[0] = 1060
+    provider.result = StokeResult(Window(2, 19060, 300), None, 12)
+    state = asyncio.run(restarted.stoke_now("claude", "auto"))
+    assert state.last_stoke is not None and state.last_stoke.ok
+    assert state.warning is None and state.consecutive_failures == 0
 
 
 def test_stale_resets_keep_limits_back_off_and_stop_at_four(
@@ -1657,6 +1688,7 @@ def test_three_inconclusive_reads_then_new_prompt(
 
 @pytest.mark.parametrize("outcome,error", [
     (ProviderError("not delivered"), "not delivered"),
+    (StokeSignedOut("Tool login expired"), "signed out"),
     (LimitsUnreadable("unreadable"), "limits unreadable"),
     (RuntimeError("private detail"), "unexpected provider error"),
     (StokeResult(Window(2, 1000, 300), None, 12), "reset time not in the future"),

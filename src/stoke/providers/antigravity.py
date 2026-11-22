@@ -13,7 +13,7 @@ from .. import clock
 from ..config import Settings
 from ..models import LimitsSnapshot, QuotaGroup, ScopedLimit, StokeResult, Window
 from ..runner import CommandResult, Runner, run_command
-from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeUnverified, iso_epoch, json_objects
+from .base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, iso_epoch, json_objects
 
 logger = logging.getLogger(__name__)
 STOKE_MODEL = "gemini-3.8-flash-low"
@@ -123,6 +123,8 @@ class AntigravityProvider:
     name = "antigravity"
     label = "Antigravity"
     reset_closes_window = False
+    reset_credits: bool = False
+    read_modes: bool = False
     auth_labels = {"shared": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command) -> None:
@@ -204,7 +206,7 @@ class AntigravityProvider:
     async def stoke(self) -> StokeResult:
         """Send the fixed prompt and confirm its window with a usage read."""
         if not self._signed_in():
-            raise ProviderError("Antigravity signed out")
+            raise StokeSignedOut("Antigravity signed out")
         delivered = False
         conversation_id = None
         try:
@@ -217,7 +219,7 @@ class AntigravityProvider:
                     delivered = status == "SUCCESS"
                     if status == "ERROR":
                         if payload.get("error") == _AUTH_ERROR:
-                            raise ProviderError("Antigravity signed out")
+                            raise StokeSignedOut("Antigravity signed out")
                         raise ProviderError("Antigravity prompt failed")
         finally:
             self._cleanup(conversation_id, delivered)
