@@ -590,7 +590,7 @@ def test_scheduler_passes_read_mode_without_read_on_switch(settings: Settings) -
     asyncio.run(scheduler.refresh_limits("codex"))
     scheduler.set_read_mode("codex", "direct")
     asyncio.run(scheduler.refresh_limits("codex"))
-    assert reader.read_modes == ["cli", "direct"]
+    assert reader.read_mode_calls == ["cli", "direct"]
     for invalid in [None, [], {}, 1, "bad"]:
         with pytest.raises(ValueError, match="^mode must be direct or cli$"):
             scheduler.set_read_mode("codex", invalid)

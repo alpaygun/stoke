@@ -127,6 +127,8 @@ class ClaudeProvider:
     name = "claude"
     label = "Claude"
     reset_closes_window = False
+    reset_credits: bool = True
+    read_modes: bool = True
     auth_labels = {"stoke": {"label": "1-year token"}, "read": {"label": "Account login"}}
 
     def __init__(self, settings: Settings, runner: Runner = run_command, http: HttpGet = http_get) -> None:

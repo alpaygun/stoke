@@ -111,7 +111,7 @@ def test_direct_retry_runs_once_without_chaining(
         monkeypatch.setattr("stoke.clock.now", lambda: 1610)
         gate.set_result(None)
         await asyncio.wait_for(task, 1)
-        assert provider.read_calls == 2 and provider.read_modes == ["direct", "direct"]
+        assert provider.read_calls == 2 and provider.read_mode_calls == ["direct", "direct"]
         assert direct_retry_delays.empty() and not scheduler._attempts and not scheduler._direct_retries
         state = scheduler.states["claude"]
         assert state.resets == replace(provider.read_result.resets, read_at=1610)
@@ -134,7 +134,7 @@ def test_direct_retry_not_scheduled_when_unnecessary(
         scheduler.set_read_mode("claude", mode)
         scheduler.set_auto_refresh("claude", enabled, 600)
         await scheduler.refresh_limits("claude")
-        assert provider.read_calls == 1 and provider.read_modes == [mode]
+        assert provider.read_calls == 1 and provider.read_mode_calls == [mode]
         assert not scheduler._attempts and not scheduler._direct_retries
 
     asyncio.run(scenario())

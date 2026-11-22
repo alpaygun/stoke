@@ -15,11 +15,12 @@ from . import clock, store
 from .config import Settings
 from .cycles import CycleLog, CycleRecord
 from .models import AutoRefresh, PendingVerify, READ_MODES, Plan, PlanOutcome, PlanRepeat, PlanResult, ReadRecord, ResetCredit, ResetCredits, StokeRecord, StokeResult, ToolState, WeeklyReset, Window, validate_auto_refresh, validate_plan
-from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, StokeUnverified, short_error
+from .providers.base import LimitReader, LimitsUnreadable, Provider, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, short_error
 
 logger = logging.getLogger(__name__)
 Trigger = Literal["auto", "manual", "startup", "planned", "reset"]
 STALE_RESET_LIMIT = 4
+SIGNED_OUT_ERROR = "signed out"
 REFRESH_BUSY_RETRY_SECONDS = 10
 # Leave a margin after the CLI's usage read for the vendor's 10-minute limit.
 DIRECT_RETRY_SECONDS = 610
@@ -173,6 +174,8 @@ def compute_warning(state: ToolState) -> str | None:
     if state.stale_resets >= STALE_RESET_LIMIT and not state.auto_stoke:
         return "auto_stopped"
     record = state.last_stoke
+    if record is not None and not record.ok and record.error == SIGNED_OUT_ERROR:
+        return "signed_out"
     if record is not None and record.opened_new_window is False:
         return "did_not_open_window"
     if record is not None and record.error == "limits unreadable":
@@ -191,6 +194,8 @@ class Scheduler:
     ) -> None:
         self.providers = dict(providers)
         self.reset_closes_window = {name: getattr(provider, "reset_closes_window", True) for name, provider in providers.items()}
+        self.reset_credits = {name: getattr(provider, "reset_credits", True) for name, provider in providers.items()}
+        self.read_modes = {name: getattr(provider, "read_modes", True) for name, provider in providers.items()}
         self.readers = {
             name: cast(LimitReader, provider) for name, provider in providers.items()
             if callable(getattr(provider, "read_limits", None))
@@ -639,7 +644,8 @@ class Scheduler:
                     self._record_failure(state, attempt_at, trigger, "limits unreadable", started)
                 except ProviderError as error:
                     state.pending_verify = None
-                    self._record_failure(state, attempt_at, trigger, str(error), started)
+                    message = SIGNED_OUT_ERROR if isinstance(error, StokeSignedOut) else str(error)
+                    self._record_failure(state, attempt_at, trigger, message, started)
                 except Exception:
                     # Unexpected provider exceptions must not expose their potentially secret text.
                     state.pending_verify = None

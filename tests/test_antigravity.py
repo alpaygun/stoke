@@ -12,7 +12,7 @@ import pytest
 from stoke.config import Settings
 from stoke.models import QuotaGroup, ScopedLimit, Window
 from stoke.providers.antigravity import AntigravityProvider, parse_usage
-from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeUnverified, redact
+from stoke.providers.base import LimitsUnreadable, ProviderError, ReaderSignedOut, StokeSignedOut, StokeUnverified, redact
 from stoke.runner import CommandResult
 
 NOW = 1800000000
@@ -235,9 +235,8 @@ def test_token_preflight_skips_cli(settings: Settings, kind: str) -> None:
     provider = AntigravityProvider(settings, runner)
     with pytest.raises(ReaderSignedOut, match="^Antigravity signed out$"):
         asyncio.run(provider.read_limits())
-    with pytest.raises(ProviderError, match="^Antigravity signed out$") as error:
+    with pytest.raises(StokeSignedOut, match="^Antigravity signed out$"):
         asyncio.run(provider.stoke())
-    assert type(error.value) is ProviderError
     assert not runner.calls
     assert not (settings.data_dir / "workdir-antigravity").exists()
 
@@ -319,19 +318,19 @@ def test_read_failure_never_exposes_output(
     assert PRIVATE not in caplog.text
 
 
-@pytest.mark.parametrize("result,message", [
-    (OSError(PRIVATE), "Antigravity CLI could not be started"),
-    (prompt_result("ERROR", error=AUTH_ERROR), "Antigravity signed out"),
-    (prompt_result("ERROR"), "Antigravity prompt failed"),
+@pytest.mark.parametrize("result,expected_type,message", [
+    (OSError(PRIVATE), ProviderError, "Antigravity CLI could not be started"),
+    (prompt_result("ERROR", error=AUTH_ERROR), StokeSignedOut, "Antigravity signed out"),
+    (prompt_result("ERROR"), ProviderError, "Antigravity prompt failed"),
 ])
 def test_definite_prompt_failure_has_no_usage_read(
-    result: CommandResult | OSError, message: str, settings: Settings, signed_in: Path,
+    result: CommandResult | OSError, expected_type: type[ProviderError], message: str, settings: Settings, signed_in: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runner = FakeRunner(result)
-    with pytest.raises(ProviderError) as raised:
+    with pytest.raises(expected_type) as raised:
         asyncio.run(AntigravityProvider(settings, runner).stoke())
-    assert type(raised.value) is ProviderError and str(raised.value) == message
+    assert type(raised.value) is expected_type and str(raised.value) == message
     assert len(runner.calls) == 1 and not runner.calls[0].log_file.parent.exists()
     assert PRIVATE not in caplog.text
 

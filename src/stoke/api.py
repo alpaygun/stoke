@@ -73,6 +73,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
             refreshable=scheduler.can_refresh(state.name), settings=settings,
             auth_labels=scheduler.providers[state.name].auth_labels,
             reset_closes_window=scheduler.reset_closes_window[state.name],
+            reset_credits=scheduler.reset_credits[state.name], read_modes=scheduler.read_modes[state.name],
             read_login_expires=read_expiry() if callable(read_expiry) else None,
         )
 
@@ -200,7 +201,7 @@ def create_app(scheduler: Scheduler, settings: Settings) -> FastAPI:
     @app.post("/api/tools/{name}/read-mode")
     async def set_read_mode(name: str, request: Request) -> dict[str, Any]:
         require_tool(name)
-        if not scheduler.can_refresh(name):
+        if not scheduler.can_refresh(name) or not scheduler.read_modes[name]:
             raise HTTPException(404, "refresh not supported")
         try:
             body = await request.json()

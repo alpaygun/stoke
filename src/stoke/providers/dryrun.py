@@ -24,7 +24,8 @@ class DryRunProvider:
         self, name: str, label: str, settings: Settings,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         *, auth_labels: dict[str, dict[str, str]] | None = None,
-        reset_closes_window: bool = True, read_login_expiry: bool = False,
+        reset_closes_window: bool = True, reset_credits: bool = True, read_modes: bool = True,
+        read_login_expiry: bool = False,
     ) -> None:
         self.read_login_expiry = read_login_expiry
         self._login_expires_at = clock.now() + 25 * 86400 if read_login_expiry else None
@@ -33,6 +34,8 @@ class DryRunProvider:
         self.settings = settings
         self.sleep = sleep
         self.reset_closes_window = reset_closes_window
+        self.reset_credits = reset_credits
+        self.read_modes = read_modes
         self.auth_labels = {key: dict(value) for key, value in (auth_labels or {}).items()}
 
     async def stoke(self) -> StokeResult:

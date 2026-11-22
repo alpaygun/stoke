@@ -219,7 +219,7 @@ def load(path: Path, settings: Settings, tools: Mapping[str, Provider]) -> dict[
                 continue
             item = data[name]
             warning = item["warning"]
-            if warning not in {None, "auto_stopped", "did_not_open_window", "limits_unreadable", "stoke_failing"}:
+            if warning not in {None, "auto_stopped", "signed_out", "did_not_open_window", "limits_unreadable", "stoke_failing"}:
                 raise ValueError("invalid warning")
             next_at = item["next_stoke_at"]
             limits_at = item.get("limits_at")

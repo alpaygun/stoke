@@ -226,6 +226,7 @@ def serialize_tool(
     *, settings: "Settings | None" = None,
     auth_labels: dict[str, dict[str, str]] | None = None,
     reset_closes_window: bool = True,
+    reset_credits: bool = True, read_modes: bool = True,
     read_login_expires: int | None = None,
 ) -> dict[str, Any]:
     """Serialize persisted fields, adding live fields only for API responses."""
@@ -253,6 +254,7 @@ def serialize_tool(
         data["window_open"] = state.five_hour is not None and state.five_hour.resets_at > now and state.window_closed_at is None
         data["refreshable"] = refreshable
         data["reset_closes_window"] = reset_closes_window
+        data["capabilities"] = {"reset_credits": reset_credits, "read_modes": read_modes}
         for entry in data["weekly_resets"]:
             del entry["credits_before"]
         data["auth"] = {key: dict(value) for key, value in (auth_labels or {}).items()}
