@@ -1,8 +1,73 @@
 """Shared test settings and providers; no test may execute a real command."""
 
 import asyncio
+import os
+import socket
+import sys
+from asyncio.selector_events import BaseSelectorEventLoop
 from pathlib import Path
 from typing import Any, Callable
+
+
+# Linux sandboxes that forbid send on AF_UNIX sockets stall asyncio's cross-thread
+# wakeups. Use a pipe only when the runtime probe sees PermissionError from send.
+# When send works, asyncio keeps its default self-pipe. This only fixes the selector
+# loop's self-pipe. Other AF_UNIX users, such as multiprocessing and Unix-socket
+# clients, can still fail under the same restriction.
+def self_pipe_send_blocked() -> bool:
+    """Check whether the Linux selector loop needs a pipe for wakeups."""
+    if not sys.platform.startswith("linux") or not hasattr(os, "pipe2"):
+        return False
+
+    try:
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            try:
+                writer.send(b"\0")
+            except PermissionError:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _make_self_pipe(self: BaseSelectorEventLoop) -> None:
+    read_fd, write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    self._ssock = os.fdopen(read_fd, "rb", buffering=0)
+    self._csock = os.fdopen(write_fd, "wb", buffering=0)
+    self._internal_fds += 1
+    self._add_reader(read_fd, self._read_from_self)
+
+
+def _read_from_self(self: BaseSelectorEventLoop) -> None:
+    while True:
+        try:
+            data = os.read(self._ssock.fileno(), 4096)
+        except InterruptedError:
+            continue
+        except BlockingIOError:
+            break
+        if not data:
+            break
+        self._process_self_data(data)
+
+
+def _write_to_self(self: BaseSelectorEventLoop) -> None:
+    csock = self._csock
+    if csock is None:
+        return
+    try:
+        os.write(csock.fileno(), b"\0")
+    except (OSError, ValueError):
+        pass
+
+
+SELF_PIPE_PATCHED = self_pipe_send_blocked()
+if SELF_PIPE_PATCHED:
+    BaseSelectorEventLoop._make_self_pipe = _make_self_pipe
+    BaseSelectorEventLoop._read_from_self = _read_from_self
+    BaseSelectorEventLoop._write_to_self = _write_to_self
+
 
 import pytest
 
